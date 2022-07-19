@@ -77,8 +77,8 @@ class BiEncoderTrainer(object):
             set_cfg_params_from_state(saved_state.encoder_params, cfg)
 
         tensorizer, model, optimizer = init_biencoder_components(cfg.encoder.encoder_model_type, cfg)
-        model.coordinate_ascent_status = 1
-        print("set coordinate-ascent status to 1")
+        model.coordinate_ascent_status = 2
+        print("set coordinate ascent status to 2 (will switch to 1 before first epoch)")
 
         model, optimizer = setup_for_distributed_mode(
             model,
@@ -192,7 +192,11 @@ class BiEncoderTrainer(object):
 
         for epoch in range(self.start_epoch, int(cfg.train.num_train_epochs)):
             logger.info("***** Epoch %d *****", epoch)
-            self.biencoder.pre_epoch()
+            self.biencoder.pre_epoch(
+                ds_cfg_train_datasets=self.ds_cfg.train_datasets,
+                tensorizer=self.tensorizer,
+                train_iterator=train_iterator,
+            )
             self._train_epoch(scheduler, epoch, eval_step, train_iterator)
             self.biencoder.post_epoch()
 

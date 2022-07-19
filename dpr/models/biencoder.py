@@ -12,17 +12,18 @@ BiEncoder component + loss function for 'all-in-batch' training
 import collections
 import logging
 import random
-from typing import Tuple, List
+from typing import List, Optional, Tuple
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import Tensor as T
 from torch import nn
+import tqdm
 
 from dpr.data.biencoder_data import BiEncoderSample
-from dpr.utils.data_utils import Tensorizer
-from dpr.utils.model_utils import CheckpointState
+from dpr.utils.data_utils import Tensorizer, MultiSetDataIterator
+from dpr.utils.model_utils import CheckpointState, move_to_device
 
 logger = logging.getLogger(__name__)
 
@@ -86,33 +87,132 @@ class BiEncoder(nn.Module):
         self.stored_q_vectors = None
         self.stored_ctx_vectors = None
     
-    def _precompute_embeddings_ctx(self) -> None:
-        print("_precompute_embeddings_ctx")
+    def _precompute_embeddings_full(self, ds_cfg_train_datasets, tensorizer, train_iterator: MultiSetDataIterator) -> Tuple[List[Optional[T]], List[Optional[T]]]:
+        qs = []
+        ctxs = []
+
+        _shuffle_store = train_iterator.shuffle
+        train_iterator.shuffle = False
+        data = train_iterator.iterate_ds_data(epoch=0)
+        for i, samples_batch in tqdm.tqdm(
+            enumerate(data),
+            colour="red", leave=False,
+            desc="Precomputing embeddings",
+            total=train_iterator.get_max_iterations()
+        ):
+            if isinstance(samples_batch, Tuple):
+                samples_batch, dataset = samples_batch
+
+            ds_cfg = ds_cfg_train_datasets[dataset]
+            special_token = ds_cfg.special_token
+            encoder_type = ds_cfg.encoder_type
+            shuffle_positives = ds_cfg.shuffle_positives
+
+            biencoder_input = self.create_biencoder_input(
+                samples_batch,
+                tensorizer,
+                True,
+                0,
+                0,
+                shuffle=False,
+                shuffle_positives=False,
+                query_token=special_token,
+            )
+            model_device = next(self.parameters()).device
+            biencoder_input = BiEncoderBatch(
+                **move_to_device(biencoder_input._asdict(), model_device))
+
+
+            # get the token to be used for representation selection
+            from dpr.utils.data_utils import DEFAULT_SELECTOR
+
+            selector = ds_cfg.selector if ds_cfg else DEFAULT_SELECTOR
+
+            rep_positions = selector.get_positions(biencoder_input.question_ids, tensorizer)
+
+            q_attn_mask = tensorizer.get_attn_mask(
+                biencoder_input.question_ids
+            )
+            ctx_attn_mask = tensorizer.get_attn_mask(
+                biencoder_input.context_ids
+            )
+            with torch.no_grad():
+                local_q_vector, local_ctx_vectors = self(
+                    biencoder_input.question_ids,
+                    biencoder_input.question_segments,
+                    q_attn_mask,
+                    biencoder_input.context_ids,
+                    biencoder_input.ctx_segments,
+                    ctx_attn_mask,
+                    encoder_type=encoder_type,
+                    representation_token_pos=rep_positions,
+                )
+            qs.append(local_q_vector)
+            ctxs.append(local_ctx_vectors)
+
+        train_iterator.shuffle = True
+        return qs, ctxs
     
-    def _precompute_embeddings_q(self) -> None:
-        print("_precompute_embeddings_q")
+    def _precompute_embeddings_ctx(self, ds_cfg_train_datasets, tensorizer, train_iterator: MultiSetDataIterator) -> None:
+        q_emb_list, ctx_emb_list = self._precompute_embeddings_full(
+            ds_cfg_train_datasets=ds_cfg_train_datasets,
+            tensorizer=tensorizer,
+            train_iterator=train_iterator
+        )
+        assert q_emb_list[0] is None
+        return torch.cat(ctx_emb_list, dim=0)
     
-    def pre_epoch(self) -> None:
+    def _precompute_embeddings_q(self, ds_cfg_train_datasets, tensorizer, train_iterator: MultiSetDataIterator) -> None:
+        q_emb_list, ctx_emb_list = self._precompute_embeddings_full(
+            ds_cfg_train_datasets=ds_cfg_train_datasets,
+            tensorizer=tensorizer,
+            train_iterator=train_iterator
+        )
+        import pdb; pdb.set_trace()
+        assert ctx_emb_list[0] is None
+        return torch.cat(q_emb_list, dim=0)
+    
+    def pre_epoch(self, ds_cfg_train_datasets, tensorizer, train_iterator: MultiSetDataIterator) -> None:
         print("BiEncoder pre_epoch() called")
         #
         #  precompute embeddings
         #
-        print("should precompute embeddings here")
+        if self.coordinate_ascent_status == CoordinateAscentStatus.TRAIN_Q:
+            self.stored_q_vectors = self._precompute_embeddings_q(
+                ds_cfg_train_datasets=ds_cfg_train_datasets,
+                tensorizer=tensorizer,
+                train_iterator=train_iterator
+            )
+            self.stored_ctx_vectors = None
+        elif self.coordinate_ascent_status == CoordinateAscentStatus.TRAIN_CTX:
+            self.stored_ctx_vectors = self._precompute_embeddings_ctx(
+                ds_cfg_train_datasets=ds_cfg_train_datasets,
+                tensorizer=tensorizer,
+                train_iterator=train_iterator
+            )
+            self.stored_q_vectors = None
+        else: # coordinate ascent disabled - do nothing
+            pass
+        
+        # flip switch **after** precomputing embeddings, so that we know
+        # we were still in the prev mode so that the model returned None
+        # for the other type.
+        self._toggle_ca_status()
+        print("post epoch self.coordinate_ascent_status =", self.coordinate_ascent_status)
     
-    def post_epoch(self) -> None:
+    def _toggle_ca_status(self) -> None:
         print("BiEncoder post_epoch() called")
         # 
         #   advance coordinate ascent status
         #
         if self.coordinate_ascent_status == CoordinateAscentStatus.TRAIN_Q:
-            # training query encoder - train ctx next
+            #    training query encoder -train ctx next
             self.coordinate_ascent_status = CoordinateAscentStatus.TRAIN_CTX
-            self._precompute_embeddings_q()
         elif self.coordinate_ascent_status == CoordinateAscentStatus.TRAIN_CTX:
-            # training context encoder - train query next
+            #    training context encoder - train query next
             self.coordinate_ascent_status = CoordinateAscentStatus.TRAIN_Q
-            self._precompute_embeddings_ctx()
-        else: # coordinate ascent disabled - do nothing
+        else:
+            #    coordinate ascent disabled - do nothing
             pass
         print("post epoch self.coordinate_ascent_status =", self.coordinate_ascent_status)
         
@@ -184,7 +284,7 @@ class BiEncoder(nn.Module):
             _ctx_seq, ctx_pooled_out, _ctx_hidden = self.get_representation(
                 ctx_encoder, context_ids, ctx_segments, ctx_attn_mask, self.fix_ctx_encoder
             )
-
+        # import pdb; pdb.set_trace()
 
         return q_pooled_out, ctx_pooled_out
 
@@ -356,8 +456,7 @@ class BiEncoderNllLoss(object):
         sims = batch_vectors @ stored_vectors.T # shape (batch_size, train_set_size)
         probs = sims.softmax(dim=1)
         # TODO: is positive_idx_per_question_right?
-        breakpoint()
-
+        import pdb; pdb.set_trace()
 
         loss = F.nll_loss(
             softmax_scores,
