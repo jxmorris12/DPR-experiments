@@ -27,7 +27,7 @@ from dpr.utils.model_utils import CheckpointState
 logger = logging.getLogger(__name__)
 
 BiEncoderBatch = collections.namedtuple(
-    "BiENcoderInput",
+    "BiEncoderInput",
     [
         "question_ids",
         "question_segments",
@@ -59,6 +59,12 @@ def cosine_scores(q_vector: T, ctx_vectors: T):
     return F.cosine_similarity(q_vector, ctx_vectors, dim=1)
 
 
+class CoordinateAscentStatus:
+    DISABLED = 0
+    TRAIN_Q = 1
+    TRAIN_CTX = 2
+
+
 class BiEncoder(nn.Module):
     """Bi-Encoder model component. Encapsulates query/question and context/passage encoders."""
 
@@ -68,12 +74,48 @@ class BiEncoder(nn.Module):
         ctx_model: nn.Module,
         fix_q_encoder: bool = False,
         fix_ctx_encoder: bool = False,
+        coordinate_ascent_status: bool = CoordinateAscentStatus.DISABLED
     ):
         super(BiEncoder, self).__init__()
         self.question_model = question_model
         self.ctx_model = ctx_model
         self.fix_q_encoder = fix_q_encoder
         self.fix_ctx_encoder = fix_ctx_encoder
+        # *** variables used for coordinate ascent ***
+        self.coordinate_ascent_status = coordinate_ascent_status
+        self.stored_q_vectors = None
+        self.stored_ctx_vectors = None
+    
+    def _precompute_embeddings_ctx(self) -> None:
+        print("_precompute_embeddings_ctx")
+    
+    def _precompute_embeddings_q(self) -> None:
+        print("_precompute_embeddings_q")
+    
+    def pre_epoch(self) -> None:
+        print("BiEncoder pre_epoch() called")
+        #
+        #  precompute embeddings
+        #
+        print("should precompute embeddings here")
+    
+    def post_epoch(self) -> None:
+        print("BiEncoder post_epoch() called")
+        # 
+        #   advance coordinate ascent status
+        #
+        if self.coordinate_ascent_status == CoordinateAscentStatus.TRAIN_Q:
+            # training query encoder - train ctx next
+            self.coordinate_ascent_status = CoordinateAscentStatus.TRAIN_CTX
+            self._precompute_embeddings_q()
+        elif self.coordinate_ascent_status == CoordinateAscentStatus.TRAIN_CTX:
+            # training context encoder - train query next
+            self.coordinate_ascent_status = CoordinateAscentStatus.TRAIN_Q
+            self._precompute_embeddings_ctx()
+        else: # coordinate ascent disabled - do nothing
+            pass
+        print("post epoch self.coordinate_ascent_status =", self.coordinate_ascent_status)
+        
 
     @staticmethod
     def get_representation(
@@ -122,19 +164,27 @@ class BiEncoder(nn.Module):
         representation_token_pos=0,
     ) -> Tuple[T, T]:
         q_encoder = self.question_model if encoder_type is None or encoder_type == "question" else self.ctx_model
-        _q_seq, q_pooled_out, _q_hidden = self.get_representation(
-            q_encoder,
-            question_ids,
-            question_segments,
-            question_attn_mask,
-            self.fix_q_encoder,
-            representation_token_pos=representation_token_pos,
-        )
 
-        ctx_encoder = self.ctx_model if encoder_type is None or encoder_type == "ctx" else self.question_model
-        _ctx_seq, ctx_pooled_out, _ctx_hidden = self.get_representation(
-            ctx_encoder, context_ids, ctx_segments, ctx_attn_mask, self.fix_ctx_encoder
-        )
+        if self.coordinate_ascent_status == CoordinateAscentStatus.TRAIN_CTX:
+            q_pooled_out = None
+        else:
+            _q_seq, q_pooled_out, _q_hidden = self.get_representation(
+                q_encoder,
+                question_ids,
+                question_segments,
+                question_attn_mask,
+                self.fix_q_encoder,
+                representation_token_pos=representation_token_pos,
+            )
+
+        if self.coordinate_ascent_status == CoordinateAscentStatus.TRAIN_Q:
+            ctx_pooled_out = None
+        else:
+            ctx_encoder = self.ctx_model if encoder_type is None or encoder_type == "ctx" else self.question_model
+            _ctx_seq, ctx_pooled_out, _ctx_hidden = self.get_representation(
+                ctx_encoder, context_ids, ctx_segments, ctx_attn_mask, self.fix_ctx_encoder
+            )
+
 
         return q_pooled_out, ctx_pooled_out
 
@@ -252,6 +302,10 @@ class BiEncoder(nn.Module):
 
 
 class BiEncoderNllLoss(object):
+    biencoder: BiEncoder
+    def __init__(self, biencoder: BiEncoder):
+        self.biencoder = biencoder
+
     def calc(
         self,
         q_vectors: T,
@@ -266,6 +320,64 @@ class BiEncoderNllLoss(object):
         loss modifications. For example - weighted NLL with different factors for hard vs regular negatives.
         :return: a tuple of loss value and amount of correct predictions per batch
         """
+
+        if self.biencoder.coordinate_ascent_status == CoordinateAscentStatus.TRAIN_Q:
+            loss, correct_predictions_count = self._calc_ca_loss(
+                batch_vectors=q_vectors,
+                stored_vectors=self.biencoder.stored_ctx_vectors,
+                positive_idx_per_question=positive_idx_per_question,
+            )
+        elif self.biencoder.coordinate_ascent_status == CoordinateAscentStatus.TRAIN_CTX:
+            loss, correct_predictions_count = self._calc_ca_loss(
+                batch_vectors=ctx_vectors,
+                stored_vectors=self.biencoder.stored_q_vectors,
+                positive_idx_per_question=positive_idx_per_question,
+            )
+        else: # regular contrastive loss
+            loss, correct_predictions_count = self._calc_contrastive_loss(
+                q_vectors=q_vectors,
+                ctx_vectors=ctx_vectors,
+                positive_idx_per_question=positive_idx_per_question,
+            )
+
+        if loss_scale:
+            loss.mul_(loss_scale)
+
+        return loss, correct_predictions_count
+    
+    def _calc_ca_loss(
+            self,
+            batch_vectors: T,
+            stored_vectors: T,
+            positive_idx_per_question: list,
+            loss_scale: float = None
+        ) -> Tuple[T, int]:
+        assert stored_vectors is not None, f"got None stored_vectors with coordinate_ascent_status {self.biencoder.coordinate_ascent_status}"
+        sims = batch_vectors @ stored_vectors.T # shape (batch_size, train_set_size)
+        probs = sims.softmax(dim=1)
+        # TODO: is positive_idx_per_question_right?
+        breakpoint()
+
+
+        loss = F.nll_loss(
+            softmax_scores,
+            torch.tensor(positive_idx_per_question).to(softmax_scores.device),
+            reduction="mean",
+        )
+
+        _max_score, max_idxs = torch.max(softmax_scores, 1)
+        correct_predictions_count = (max_idxs == torch.tensor(positive_idx_per_question).to(max_idxs.device)).sum()
+
+        return loss, correct_predictions_count
+
+    
+    def _calc_contrastive_loss(
+            self,
+            q_vectors: T,
+            ctx_vectors: T,
+            positive_idx_per_question: list,
+            hard_negative_idx_per_question: list = None,
+        ) -> Tuple[T, int]:
         scores = self.get_scores(q_vectors, ctx_vectors)
 
         if len(q_vectors.size()) > 1:
@@ -280,11 +392,8 @@ class BiEncoderNllLoss(object):
             reduction="mean",
         )
 
-        max_score, max_idxs = torch.max(softmax_scores, 1)
+        _max_score, max_idxs = torch.max(softmax_scores, 1)
         correct_predictions_count = (max_idxs == torch.tensor(positive_idx_per_question).to(max_idxs.device)).sum()
-
-        if loss_scale:
-            loss.mul_(loss_scale)
 
         return loss, correct_predictions_count
 

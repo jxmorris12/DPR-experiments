@@ -77,6 +77,8 @@ class BiEncoderTrainer(object):
             set_cfg_params_from_state(saved_state.encoder_params, cfg)
 
         tensorizer, model, optimizer = init_biencoder_components(cfg.encoder.encoder_model_type, cfg)
+        model.coordinate_ascent_status = 1
+        print("set coordinate-ascent status to 1")
 
         model, optimizer = setup_for_distributed_mode(
             model,
@@ -190,7 +192,9 @@ class BiEncoderTrainer(object):
 
         for epoch in range(self.start_epoch, int(cfg.train.num_train_epochs)):
             logger.info("***** Epoch %d *****", epoch)
+            self.biencoder.pre_epoch()
             self._train_epoch(scheduler, epoch, eval_step, train_iterator)
+            self.biencoder.post_epoch()
 
         if cfg.local_rank in [-1, 0]:
             logger.info("Training finished. Best validation checkpoint %s", self.best_cp_name)
@@ -620,44 +624,7 @@ def _calc_loss(
     """
     distributed_world_size = cfg.distributed_world_size or 1
     if distributed_world_size > 1:
-        q_vector_to_send = torch.empty_like(local_q_vector).cpu().copy_(local_q_vector).detach_()
-        ctx_vector_to_send = torch.empty_like(local_ctx_vectors).cpu().copy_(local_ctx_vectors).detach_()
-
-        global_question_ctx_vectors = all_gather_list(
-            [
-                q_vector_to_send,
-                ctx_vector_to_send,
-                local_positive_idxs,
-                local_hard_negatives_idxs,
-            ],
-            max_size=cfg.global_loss_buf_sz,
-        )
-
-        global_q_vector = []
-        global_ctxs_vector = []
-
-        # ctxs_per_question = local_ctx_vectors.size(0)
-        positive_idx_per_question = []
-        hard_negatives_per_question = []
-
-        total_ctxs = 0
-
-        for i, item in enumerate(global_question_ctx_vectors):
-            q_vector, ctx_vectors, positive_idx, hard_negatives_idxs = item
-
-            if i != cfg.local_rank:
-                global_q_vector.append(q_vector.to(local_q_vector.device))
-                global_ctxs_vector.append(ctx_vectors.to(local_q_vector.device))
-                positive_idx_per_question.extend([v + total_ctxs for v in positive_idx])
-                hard_negatives_per_question.extend([[v + total_ctxs for v in l] for l in hard_negatives_idxs])
-            else:
-                global_q_vector.append(local_q_vector)
-                global_ctxs_vector.append(local_ctx_vectors)
-                positive_idx_per_question.extend([v + total_ctxs for v in local_positive_idxs])
-                hard_negatives_per_question.extend([[v + total_ctxs for v in l] for l in local_hard_negatives_idxs])
-            total_ctxs += ctx_vectors.size(0)
-        global_q_vector = torch.cat(global_q_vector, dim=0)
-        global_ctxs_vector = torch.cat(global_ctxs_vector, dim=0)
+        raise ValueError("distributed not supported for coordinate ascent")
 
     else:
         global_q_vector = local_q_vector
@@ -728,7 +695,7 @@ def _do_biencoder_fwd_pass(
 
     local_q_vector, local_ctx_vectors = model_out
 
-    loss_function = BiEncoderNllLoss()
+    loss_function = BiEncoderNllLoss(biencoder=model)
 
     loss, is_correct = _calc_loss(
         cfg,

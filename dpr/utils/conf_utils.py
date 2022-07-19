@@ -39,6 +39,7 @@ def _init_dataset(name: str, ds_cfg: DictConfig):
         files = glob.glob(name)
         return [_init_dataset(f, ds_cfg) for f in files]
     # try to find in cfg
+    print("ds_cfg:", ds_cfg.keys())
     if name not in ds_cfg:
         raise RuntimeError("Can't find dataset location/config for: {}".format(name))
     return hydra.utils.instantiate(ds_cfg[name])
