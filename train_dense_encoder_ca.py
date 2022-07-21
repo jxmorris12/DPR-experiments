@@ -772,7 +772,7 @@ def main(cfg: DictConfig):
         name='biencoder_ca',
         project='dpr-ca',
         entity='jack-morris',
-        config=cfg,
+        config=dict(cfg.train),
     )
 
     if cfg.output_dir is not None:
