@@ -16,7 +16,7 @@ import os
 import random
 import sys
 import time
-from typing import Tuple
+from typing import Optional, Tuple
 
 import hydra
 import torch
@@ -80,6 +80,10 @@ class BiEncoderTrainer(object):
         model.coordinate_ascent_status = 2
         print("set coordinate ascent status to 2 (will switch to 1 before first epoch)")
 
+        cfg.train.other_negatives = 0
+        cfg.train.hard_negatives = 0
+        print("disabled negatives")
+
         model, optimizer = setup_for_distributed_mode(
             model,
             optimizer,
@@ -134,10 +138,12 @@ class BiEncoderTrainer(object):
                 shuffle=shuffle,
                 shuffle_seed=shuffle_seed,
                 offset=offset,
+                strict_batch_size=True, # same as drop_last=False in pytorch dataloader
             )
             for ds in hydra_datasets
         ]
 
+        print(f"getting {'train' if is_train_set else 'dev'} set with shuffle={shuffle}")
         return MultiSetDataIterator(
             sharded_iterators,
             shuffle_seed,
@@ -150,9 +156,17 @@ class BiEncoderTrainer(object):
         cfg = self.cfg
 
         train_iterator = self.get_data_iterator(
-            cfg.train.batch_size,
-            True,
+            batch_size=cfg.train.batch_size,
+            is_train_set=True,
             shuffle=True,
+            shuffle_seed=cfg.seed,
+            offset=self.start_batch,
+            rank=cfg.local_rank,
+        )
+        unshuffled_train_iterator = self.get_data_iterator(
+            batch_size=cfg.train.batch_size,
+            is_train_set=True,
+            shuffle=False,
             shuffle_seed=cfg.seed,
             offset=self.start_batch,
             rank=cfg.local_rank,
@@ -195,10 +209,9 @@ class BiEncoderTrainer(object):
             self.biencoder.pre_epoch(
                 ds_cfg_train_datasets=self.ds_cfg.train_datasets,
                 tensorizer=self.tensorizer,
-                train_iterator=train_iterator,
+                train_iterator=unshuffled_train_iterator,
             )
             self._train_epoch(scheduler, epoch, eval_step, train_iterator)
-            self.biencoder.post_epoch()
 
         if cfg.local_rank in [-1, 0]:
             logger.info("Training finished. Best validation checkpoint %s", self.best_cp_name)
@@ -447,7 +460,6 @@ class BiEncoderTrainer(object):
         eval_step: int,
         train_data_iterator: MultiSetDataIterator,
     ):
-
         cfg = self.cfg
         rolling_train_loss = 0.0
         epoch_loss = 0
@@ -477,7 +489,7 @@ class BiEncoderTrainer(object):
             data_iteration = train_data_iterator.get_iteration()
             random.seed(seed + epoch + data_iteration)
 
-            biencoder_batch = biencoder.create_biencoder_input(
+            biencoder_input = biencoder.create_biencoder_input(
                 samples_batch,
                 self.tensorizer,
                 True,
@@ -493,12 +505,14 @@ class BiEncoderTrainer(object):
 
             selector = ds_cfg.selector if ds_cfg else DEFAULT_SELECTOR
 
-            rep_positions = selector.get_positions(biencoder_batch.question_ids, self.tensorizer)
+            rep_positions = selector.get_positions(biencoder_input.question_ids, self.tensorizer)
 
             loss_scale = cfg.loss_scale_factors[dataset] if cfg.loss_scale_factors else None
+            # import pdb; pdb.set_trace()
+            
             loss, correct_cnt = _do_biencoder_fwd_pass(
                 self.biencoder,
-                biencoder_batch,
+                biencoder_input,
                 self.tensorizer,
                 cfg,
                 encoder_type=encoder_type,
@@ -620,6 +634,7 @@ def _calc_loss(
     local_ctx_vectors,
     local_positive_idxs,
     local_hard_negatives_idxs: list = None,
+    absolute_idxs: Optional[T] = None,
     loss_scale: float = None,
 ) -> Tuple[T, bool]:
     """
@@ -641,6 +656,7 @@ def _calc_loss(
         global_ctxs_vector,
         positive_idx_per_question,
         hard_negatives_per_question,
+        absolute_idxs=absolute_idxs,
         loss_scale=loss_scale,
     )
 
@@ -668,7 +684,9 @@ def _do_biencoder_fwd_pass(
     loss_scale: float = None,
 ) -> Tuple[torch.Tensor, int]:
 
-    input = BiEncoderBatch(**move_to_device(input._asdict(), cfg.device))
+    input = BiEncoderBatch(
+        **move_to_device(input._asdict(), cfg.device)
+    )
 
     q_attn_mask = tensorizer.get_attn_mask(input.question_ids)
     ctx_attn_mask = tensorizer.get_attn_mask(input.context_ids)
@@ -699,7 +717,12 @@ def _do_biencoder_fwd_pass(
 
     local_q_vector, local_ctx_vectors = model_out
 
-    loss_function = BiEncoderNllLoss(biencoder=model)
+    # if model.coordinate_ascent_status == 2:
+        # import pdb; pdb.set_trace()
+
+    loss_function = BiEncoderNllLoss(
+        biencoder=model,
+    )
 
     loss, is_correct = _calc_loss(
         cfg,
@@ -708,6 +731,7 @@ def _do_biencoder_fwd_pass(
         local_ctx_vectors,
         input.is_positive,
         input.hard_negatives,
+        absolute_idxs=input.query_absolute_idxs,
         loss_scale=loss_scale,
     )
     is_correct = is_correct.sum().item()

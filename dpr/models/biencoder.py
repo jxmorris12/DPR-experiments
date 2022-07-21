@@ -22,7 +22,7 @@ from torch import nn
 import tqdm
 
 from dpr.data.biencoder_data import BiEncoderSample
-from dpr.utils.data_utils import Tensorizer, MultiSetDataIterator
+from dpr.utils.data_utils import DEFAULT_SELECTOR, Tensorizer, MultiSetDataIterator
 from dpr.utils.model_utils import CheckpointState, move_to_device
 
 logger = logging.getLogger(__name__)
@@ -37,6 +37,10 @@ BiEncoderBatch = collections.namedtuple(
         "is_positive",
         "hard_negatives",
         "encoder_type",
+        "query_absolute_idxs", 
+        "positive_passage_absolute_idxs",
+        "negative_passage_absolute_idxs",
+        "hard_negative_passage_absolute_idxs",
     ],
 )
 # TODO: it is only used by _select_span_with_token. Move them to utils
@@ -89,10 +93,13 @@ class BiEncoder(nn.Module):
     
     def _precompute_embeddings_full(self, ds_cfg_train_datasets, tensorizer, train_iterator: MultiSetDataIterator) -> Tuple[List[Optional[T]], List[Optional[T]]]:
         qs = []
-        ctxs = []
+        pos_ctxs = []
+        neg_ctxs = []
 
         _shuffle_store = train_iterator.shuffle
         train_iterator.shuffle = False
+        # ((TREC) Question Classification dataset contains 5500 labeled questions in training set and another 500 for test set.)
+        
         data = train_iterator.iterate_ds_data(epoch=0)
         for i, samples_batch in tqdm.tqdm(
             enumerate(data),
@@ -108,24 +115,26 @@ class BiEncoder(nn.Module):
             encoder_type = ds_cfg.encoder_type
             shuffle_positives = ds_cfg.shuffle_positives
 
+            # breakpoint() # figuring out how to specify hard negatives
             biencoder_input = self.create_biencoder_input(
-                samples_batch,
-                tensorizer,
-                True,
-                0,
-                0,
+                samples=samples_batch,
+                tensorizer=tensorizer,
+                insert_title=True,
+                num_hard_negatives=(2 if self.coordinate_ascent_status == CoordinateAscentStatus.TRAIN_CTX else 0), # set to 100 to use them all!
+                num_other_negatives=0,
                 shuffle=False,
                 shuffle_positives=False,
+                hard_neg_fallback=True,
                 query_token=special_token,
             )
-            model_device = next(self.parameters()).device
-            biencoder_input = BiEncoderBatch(
-                **move_to_device(biencoder_input._asdict(), model_device))
 
+            model_device = next(self.parameters()).device
+
+            biencoder_input = BiEncoderBatch(
+                **move_to_device(biencoder_input._asdict(), model_device)
+            )
 
             # get the token to be used for representation selection
-            from dpr.utils.data_utils import DEFAULT_SELECTOR
-
             selector = ds_cfg.selector if ds_cfg else DEFAULT_SELECTOR
 
             rep_positions = selector.get_positions(biencoder_input.question_ids, tensorizer)
@@ -148,12 +157,25 @@ class BiEncoder(nn.Module):
                     representation_token_pos=rep_positions,
                 )
             qs.append(local_q_vector)
-            ctxs.append(local_ctx_vectors)
+
+            # TODO: make this block of code more idiomatic pytorch.
+            if (local_ctx_vectors is not None) and len(local_ctx_vectors) > 0:
+                ctx_mask = torch.zeros(len(local_ctx_vectors), dtype=torch.bool)
+                ctx_mask.scatter_(0, torch.tensor(biencoder_input.is_positive), 1)
+                ctx_mask = ctx_mask.to(local_ctx_vectors.device)
+                pos_ctxs.append(
+                    local_ctx_vectors.masked_select(ctx_mask[:, None]).reshape(-1, 768)
+                )
+                neg_ctxs.append(
+                    local_ctx_vectors.masked_select(~ctx_mask[:, None]).reshape(-1, 768)
+                )
 
         train_iterator.shuffle = True
-        return qs, ctxs
+        # stack context embeddings, with all the positive ones first, so the indices should line up.
+        return qs, (pos_ctxs + neg_ctxs)
     
     def _precompute_embeddings_ctx(self, ds_cfg_train_datasets, tensorizer, train_iterator: MultiSetDataIterator) -> None:
+        print("faking ctx embeddings precomputing. how do we actually do this for all posisble contexts??")
         q_emb_list, ctx_emb_list = self._precompute_embeddings_full(
             ds_cfg_train_datasets=ds_cfg_train_datasets,
             tensorizer=tensorizer,
@@ -168,8 +190,7 @@ class BiEncoder(nn.Module):
             tensorizer=tensorizer,
             train_iterator=train_iterator
         )
-        import pdb; pdb.set_trace()
-        assert ctx_emb_list[0] is None
+        assert (len(ctx_emb_list) == 0) or (ctx_emb_list[0] is None)
         return torch.cat(q_emb_list, dim=0)
     
     def pre_epoch(self, ds_cfg_train_datasets, tensorizer, train_iterator: MultiSetDataIterator) -> None:
@@ -183,6 +204,7 @@ class BiEncoder(nn.Module):
                 tensorizer=tensorizer,
                 train_iterator=train_iterator
             )
+            print("self.stored_q_vectors.shape =", self.stored_q_vectors.shape)
             self.stored_ctx_vectors = None
         elif self.coordinate_ascent_status == CoordinateAscentStatus.TRAIN_CTX:
             self.stored_ctx_vectors = self._precompute_embeddings_ctx(
@@ -190,6 +212,7 @@ class BiEncoder(nn.Module):
                 tensorizer=tensorizer,
                 train_iterator=train_iterator
             )
+            print("self.stored_ctx_vectors.shape =", self.stored_ctx_vectors.shape)
             self.stored_q_vectors = None
         else: # coordinate ascent disabled - do nothing
             pass
@@ -284,7 +307,6 @@ class BiEncoder(nn.Module):
             _ctx_seq, ctx_pooled_out, _ctx_hidden = self.get_representation(
                 ctx_encoder, context_ids, ctx_segments, ctx_attn_mask, self.fix_ctx_encoder
             )
-        # import pdb; pdb.set_trace()
 
         return q_pooled_out, ctx_pooled_out
 
@@ -315,6 +337,11 @@ class BiEncoder(nn.Module):
         ctx_tensors = []
         positive_ctx_indices = []
         hard_neg_ctx_indices = []
+
+        query_absolute_idxs = []
+        positive_passage_absolute_idxs = []
+        negative_passage_absolute_idxs = []
+        hard_negative_passage_absolute_idxs = []
 
         for sample in samples:
             # ctx+ & [ctx-] composition
@@ -364,6 +391,21 @@ class BiEncoder(nn.Module):
                 ]
             )
 
+            ########################################################
+            query_absolute_idxs.append(sample.query_idx)
+            # positive_passage_absolute_idxs.append(
+            #     torch.tensor([p.index for p in sample.positive_passages])
+            # )
+            # negative_passage_absolute_idxs.append(
+            #     torch.tensor([p.index for p in sample.negative_passages])
+            # )
+            # hard_negative_passage_absolute_idxs.append(
+            #     torch.tensor([p.index for p in sample.hard_negative_passages])
+            # )
+            # import pdb; pdb.set_trace()
+
+            ########################################################
+
             if query_token:
                 # TODO: tmp workaround for EL, remove or revise
                 if query_token == "[START_ENT]":
@@ -380,6 +422,16 @@ class BiEncoder(nn.Module):
         ctx_segments = torch.zeros_like(ctxs_tensor)
         question_segments = torch.zeros_like(questions_tensor)
 
+
+        query_absolute_idxs = torch.tensor(query_absolute_idxs)
+        # can't stack tensors because they may be different lengths
+        # negative_passage_absolute_idxs = torch.stack(
+        #     negative_passage_absolute_idxs
+        # )
+        # hard_negative_passage_absolute_idxs = torch.stack(
+        #     hard_negative_passage_absolute_idxs
+        # )
+
         return BiEncoderBatch(
             questions_tensor,
             question_segments,
@@ -388,6 +440,10 @@ class BiEncoder(nn.Module):
             positive_ctx_indices,
             hard_neg_ctx_indices,
             "question",
+            query_absolute_idxs,
+            positive_passage_absolute_idxs,
+            negative_passage_absolute_idxs,
+            hard_negative_passage_absolute_idxs,
         )
 
     def load_state(self, saved_state: CheckpointState, strict: bool = True):
@@ -412,6 +468,7 @@ class BiEncoderNllLoss(object):
         ctx_vectors: T,
         positive_idx_per_question: list,
         hard_negative_idx_per_question: list = None,
+        absolute_idxs: Optional[T] = None,
         loss_scale: float = None,
     ) -> Tuple[T, int]:
         """
@@ -425,13 +482,13 @@ class BiEncoderNllLoss(object):
             loss, correct_predictions_count = self._calc_ca_loss(
                 batch_vectors=q_vectors,
                 stored_vectors=self.biencoder.stored_ctx_vectors,
-                positive_idx_per_question=positive_idx_per_question,
+                absolute_idxs=absolute_idxs,
             )
         elif self.biencoder.coordinate_ascent_status == CoordinateAscentStatus.TRAIN_CTX:
             loss, correct_predictions_count = self._calc_ca_loss(
                 batch_vectors=ctx_vectors,
                 stored_vectors=self.biencoder.stored_q_vectors,
-                positive_idx_per_question=positive_idx_per_question,
+                absolute_idxs=absolute_idxs,
             )
         else: # regular contrastive loss
             loss, correct_predictions_count = self._calc_contrastive_loss(
@@ -449,23 +506,25 @@ class BiEncoderNllLoss(object):
             self,
             batch_vectors: T,
             stored_vectors: T,
-            positive_idx_per_question: list,
+            absolute_idxs: T,
             loss_scale: float = None
         ) -> Tuple[T, int]:
         assert stored_vectors is not None, f"got None stored_vectors with coordinate_ascent_status {self.biencoder.coordinate_ascent_status}"
         sims = batch_vectors @ stored_vectors.T # shape (batch_size, train_set_size)
-        probs = sims.softmax(dim=1)
-        # TODO: is positive_idx_per_question_right?
-        import pdb; pdb.set_trace()
+        softmax_scores = sims.log_softmax(dim=1)
 
+        # print("absolute_idxs:", absolute_idxs.tolist())
+        # print("softmax_scores.shape:", softmax_scores.shape, "absolute_idxs.shape:", absolute_idxs.shape)
         loss = F.nll_loss(
             softmax_scores,
-            torch.tensor(positive_idx_per_question).to(softmax_scores.device),
+            absolute_idxs.to(softmax_scores.device),
             reduction="mean",
         )
 
         _max_score, max_idxs = torch.max(softmax_scores, 1)
-        correct_predictions_count = (max_idxs == torch.tensor(positive_idx_per_question).to(max_idxs.device)).sum()
+        correct_predictions_count = (
+            max_idxs == absolute_idxs.to(max_idxs.device)
+        ).sum()
 
         return loss, correct_predictions_count
 

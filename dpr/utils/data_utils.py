@@ -331,6 +331,7 @@ class LocalShardedDataIterator(ShardedDataIterator):
 
     def get_shard_indices(self, epoch: int):
         indices = list(range(len(self.dataset)))
+        # import pdb; pdb.set_trace()
         if self.shuffle:
             # to be able to resume, same shuffling should be used when starting from a failed/stopped iteration
             epoch_rnd = random.Random(self.shuffle_seed + epoch)

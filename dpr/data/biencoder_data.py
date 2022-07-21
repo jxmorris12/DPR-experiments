@@ -13,7 +13,9 @@ from dpr.data.tables import Table
 from dpr.utils.data_utils import read_data_from_json_files, Dataset
 
 logger = logging.getLogger(__name__)
-BiEncoderPassage = collections.namedtuple("BiEncoderPassage", ["text", "title"])
+BiEncoderPassage = collections.namedtuple(
+    "BiEncoderPassage", ["text", "title", "index"]
+)
 
 
 def get_dpr_files(source_name) -> List[str]:
@@ -27,6 +29,7 @@ def get_dpr_files(source_name) -> List[str]:
 
 class BiEncoderSample(object):
     query: str
+    query_idx: int
     positive_passages: List[BiEncoderPassage]
     negative_passages: List[BiEncoderPassage]
     hard_negative_passages: List[BiEncoderPassage]
@@ -82,6 +85,7 @@ class JsonQADataset(Dataset):
         json_sample = self.data[index]
         r = BiEncoderSample()
         r.query = self._process_query(json_sample["question"])
+        r.query_idx = index
 
         positive_ctxs = json_sample["positive_ctxs"]
         if self.exclude_gold:
@@ -100,6 +104,7 @@ class JsonQADataset(Dataset):
             return BiEncoderPassage(
                 normalize_passage(ctx["text"]) if self.normalize else ctx["text"],
                 ctx["title"],
+                index
             )
 
         r.positive_passages = [create_passage(ctx) for ctx in positive_ctxs]
