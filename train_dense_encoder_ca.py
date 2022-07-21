@@ -23,9 +23,10 @@ import torch
 from omegaconf import DictConfig, OmegaConf
 from torch import Tensor as T
 from torch import nn
+import wandb
 
 from dpr.models import init_biencoder_components
-from dpr.models.biencoder import BiEncoderNllLoss, BiEncoderBatch
+from dpr.models.biencoder import BiEncoderNllLoss, BiEncoderBatch, CoordinateAscentStatus
 from dpr.options import (
     setup_cfg_gpu,
     set_seed,
@@ -77,12 +78,8 @@ class BiEncoderTrainer(object):
             set_cfg_params_from_state(saved_state.encoder_params, cfg)
 
         tensorizer, model, optimizer = init_biencoder_components(cfg.encoder.encoder_model_type, cfg)
-        model.coordinate_ascent_status = 2
+        model.coordinate_ascent_status = CoordinateAscentStatus.TRAIN_CTX
         print("set coordinate ascent status to 2 (will switch to 1 before first epoch)")
-
-        cfg.train.other_negatives = 0
-        cfg.train.hard_negatives = 0
-        print("disabled negatives")
 
         model, optimizer = setup_for_distributed_mode(
             model,
@@ -206,10 +203,12 @@ class BiEncoderTrainer(object):
 
         for epoch in range(self.start_epoch, int(cfg.train.num_train_epochs)):
             logger.info("***** Epoch %d *****", epoch)
+            self.biencoder.train()
             self.biencoder.pre_epoch(
                 ds_cfg_train_datasets=self.ds_cfg.train_datasets,
                 tensorizer=self.tensorizer,
                 train_iterator=unshuffled_train_iterator,
+                num_hard_negatives=cfg.train.precomputed_hard_negatives
             )
             self._train_epoch(scheduler, epoch, eval_step, train_iterator)
 
@@ -229,8 +228,10 @@ class BiEncoderTrainer(object):
         else:
             if epoch >= cfg.val_av_rank_start_epoch:
                 validation_loss = self.validate_average_rank()
+                wandb.log({ "val_average_rank": validation_loss, "epoch": epoch, "step": iteration })
             else:
                 validation_loss = self.validate_nll()
+                wandb.log({ "val_nll": validation_loss, "epoch": epoch, "step": iteration })
 
         if save_cp:
             cp_name = self._save_checkpoint(scheduler, epoch, iteration)
@@ -262,6 +263,9 @@ class BiEncoderTrainer(object):
         dataset = 0
         biencoder = get_model_obj(self.biencoder)
 
+
+        current_ca_status = self.biencoder.coordinate_ascent_status
+        self.biencoder.coordinate_ascent_status = CoordinateAscentStatus.DISABLED # DISABLED
         for i, samples_batch in enumerate(data_iterator.iterate_ds_data()):
             if isinstance(samples_batch, Tuple):
                 samples_batch, dataset = samples_batch
@@ -310,6 +314,7 @@ class BiEncoderTrainer(object):
             total_samples,
             correct_ratio,
         )
+        self.biencoder.coordinate_ascent_status = current_ca_status
         return total_loss
 
     def validate_average_rank(self) -> float:
@@ -336,8 +341,8 @@ class BiEncoderTrainer(object):
 
         sub_batch_size = cfg.train.val_av_rank_bsz
         sim_score_f = BiEncoderNllLoss.get_similarity_function()
-        q_represenations = []
-        ctx_represenations = []
+        q_representations = []
+        ctx_representations = []
         positive_idx_per_question = []
 
         num_hard_negatives = cfg.train.val_av_rank_hard_neg
@@ -345,10 +350,14 @@ class BiEncoderTrainer(object):
 
         log_result_step = cfg.train.log_batch_step
         dataset = 0
+        current_ca_status = self.biencoder.coordinate_ascent_status
+        self.biencoder.coordinate_ascent_status = CoordinateAscentStatus.DISABLED
+        
         biencoder = get_model_obj(self.biencoder)
+
         for i, samples_batch in enumerate(data_iterator.iterate_ds_data()):
             # samples += 1
-            if len(q_represenations) > cfg.train.val_av_rank_max_qs / distributed_factor:
+            if len(q_representations) > cfg.train.val_av_rank_max_qs / distributed_factor:
                 break
 
             if isinstance(samples_batch, Tuple):
@@ -366,7 +375,7 @@ class BiEncoderTrainer(object):
             biencoder_input = BiEncoderBatch(
                 **move_to_device(biencoder_input._asdict(), cfg.device)
             )
-            total_ctxs = len(ctx_represenations)
+            total_ctxs = len(ctx_representations)
             ctxs_ids = biencoder_input.context_ids
             ctxs_segments = biencoder_input.ctx_segments
             bsz = ctxs_ids.size(0)
@@ -406,9 +415,9 @@ class BiEncoderTrainer(object):
                     )
 
                 if q_dense is not None:
-                    q_represenations.extend(q_dense.cpu().split(1, dim=0))
+                    q_representations.extend(q_dense.cpu().split(1, dim=0))
 
-                ctx_represenations.extend(ctx_dense.cpu().split(1, dim=0))
+                ctx_representations.extend(ctx_dense.cpu().split(1, dim=0))
 
             batch_positive_idxs = biencoder_input.is_positive
             positive_idx_per_question.extend([total_ctxs + v for v in batch_positive_idxs])
@@ -417,20 +426,20 @@ class BiEncoderTrainer(object):
                 logger.info(
                     "Av.rank validation: step %d, computed ctx_vectors %d, q_vectors %d",
                     i,
-                    len(ctx_represenations),
-                    len(q_represenations),
+                    len(ctx_representations),
+                    len(q_representations),
                 )
 
-        ctx_represenations = torch.cat(ctx_represenations, dim=0)
-        q_represenations = torch.cat(q_represenations, dim=0)
+        ctx_representations = torch.cat(ctx_representations, dim=0)
+        q_representations = torch.cat(q_representations, dim=0)
 
-        logger.info("Av.rank validation: total q_vectors size=%s", q_represenations.size())
-        logger.info("Av.rank validation: total ctx_vectors size=%s", ctx_represenations.size())
+        logger.info("Av.rank validation: total q_vectors size=%s", q_representations.size())
+        logger.info("Av.rank validation: total ctx_vectors size=%s", ctx_representations.size())
 
-        q_num = q_represenations.size(0)
+        q_num = q_representations.size(0)
         assert q_num == len(positive_idx_per_question)
 
-        scores = sim_score_f(q_represenations, ctx_represenations)
+        scores = sim_score_f(q_representations, ctx_representations)
         values, indices = torch.sort(scores, dim=1, descending=True)
 
         rank = 0
@@ -439,18 +448,20 @@ class BiEncoderTrainer(object):
             gold_idx = (indices[i] == idx).nonzero()
             rank += gold_idx.item()
 
-        if distributed_factor > 1:
-            # each node calcuated its own rank, exchange the information between node and calculate the "global" average rank
-            # NOTE: the set of passages is still unique for every node
-            eval_stats = all_gather_list([rank, q_num], max_size=100)
-            for i, item in enumerate(eval_stats):
-                remote_rank, remote_q_num = item
-                if i != cfg.local_rank:
-                    rank += remote_rank
-                    q_num += remote_q_num
+        # DELME
+        # if distributed_factor > 1:
+        #     # each node calcuated its own rank, exchange the information between node and calculate the "global" average rank
+        #     # NOTE: the set of passages is still unique for every node
+        #     eval_stats = all_gather_list([rank, q_num], max_size=100)
+        #     for i, item in enumerate(eval_stats):
+        #         remote_rank, remote_q_num = item
+        #         if i != cfg.local_rank:
+        #             rank += remote_rank
+        #             q_num += remote_q_num
 
         av_rank = float(rank / q_num)
         logger.info("Av.rank validation: average rank %s, total questions=%d", av_rank, q_num)
+        self.biencoder.coordinate_ascent_status = current_ca_status
         return av_rank
 
     def _train_epoch(
@@ -550,6 +561,7 @@ class BiEncoderTrainer(object):
                     loss.item(),
                     lr,
                 )
+                wandb.log({ "epoch": epoch, "step": data_iteration, "learning_rate": lr, "train_loss": loss.item() })
 
             if (i + 1) % rolling_loss_step == 0:
                 logger.info("Train batch %d", data_iteration)
@@ -578,6 +590,10 @@ class BiEncoderTrainer(object):
         epoch_loss = (epoch_loss / epoch_batches) if epoch_batches > 0 else 0
         logger.info("Av Loss per epoch=%f", epoch_loss)
         logger.info("epoch total correct predictions=%d", epoch_correct_predictions)
+
+        wandb.log({ "train_loss_epoch": epoch_loss, "epoch": epoch, "step": train_data_iterator.get_iteration() })
+        wandb.log({ "train_num_correct": epoch_correct_predictions, "epoch": epoch, "step": train_data_iterator.get_iteration() })
+
 
     def _save_checkpoint(self, scheduler, epoch: int, offset: int) -> str:
         cfg = self.cfg
@@ -751,6 +767,13 @@ def main(cfg: DictConfig):
                 cfg.train.gradient_accumulation_steps
             )
         )
+    
+    wandb.init(
+        name='biencoder_ca',
+        project='dpr-ca',
+        entity='jack-morris',
+        config=cfg,
+    )
 
     if cfg.output_dir is not None:
         os.makedirs(cfg.output_dir, exist_ok=True)

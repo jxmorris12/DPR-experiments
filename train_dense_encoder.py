@@ -23,6 +23,7 @@ import torch
 from omegaconf import DictConfig, OmegaConf
 from torch import Tensor as T
 from torch import nn
+import wandb
 
 from dpr.models import init_biencoder_components
 from dpr.models.biencoder import BiEncoderNllLoss, BiEncoderBatch
@@ -208,8 +209,10 @@ class BiEncoderTrainer(object):
         else:
             if epoch >= cfg.val_av_rank_start_epoch:
                 validation_loss = self.validate_average_rank()
+                wandb.log({ "val_average_rank": validation_loss, "epoch": epoch, "step": iteration })
             else:
                 validation_loss = self.validate_nll()
+                wandb.log({ "val_nll": validation_loss, "epoch": epoch, "step": iteration })
 
         if save_cp:
             cp_name = self._save_checkpoint(scheduler, epoch, iteration)
@@ -296,7 +299,7 @@ class BiEncoderTrainer(object):
         Validates biencoder model using each question's gold passage's rank across the set of passages from the dataset.
         It generates vectors for specified amount of negative passages from each question (see --val_av_rank_xxx params)
         and stores them in RAM as well as question vectors.
-        Then the similarity scores are calculted for the entire
+        Then the similarity scores are calculated for the entire
         num_questions x (num_questions x num_passages_per_question) matrix and sorted per quesrtion.
         Each question's gold passage rank in that  sorted list of scores is averaged across all the questions.
         :return: averaged rank number
@@ -528,6 +531,7 @@ class BiEncoderTrainer(object):
                     loss.item(),
                     lr,
                 )
+                wandb.log({ "epoch": epoch, "step": data_iteration, "learning_rate": lr, "train_loss": loss.item() })
 
             if (i + 1) % rolling_loss_step == 0:
                 logger.info("Train batch %d", data_iteration)
@@ -556,6 +560,9 @@ class BiEncoderTrainer(object):
         epoch_loss = (epoch_loss / epoch_batches) if epoch_batches > 0 else 0
         logger.info("Av Loss per epoch=%f", epoch_loss)
         logger.info("epoch total correct predictions=%d", epoch_correct_predictions)
+
+        wandb.log({ "train_loss_epoch": epoch_loss, "epoch": epoch, "step": train_data_iterator.get_iteration() })
+        wandb.log({ "train_num_correct": epoch_correct_predictions, "epoch": epoch, "step": train_data_iterator.get_iteration() })
 
     def _save_checkpoint(self, scheduler, epoch: int, offset: int) -> str:
         cfg = self.cfg
@@ -756,6 +763,13 @@ def main(cfg: DictConfig):
                 cfg.train.gradient_accumulation_steps
             )
         )
+
+    wandb.init(
+        name='biencoder_contrastive',
+        project='dpr-ca',
+        entity='jack-morris',
+        config=cfg,
+    )
 
     if cfg.output_dir is not None:
         os.makedirs(cfg.output_dir, exist_ok=True)

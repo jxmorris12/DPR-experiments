@@ -91,7 +91,8 @@ class BiEncoder(nn.Module):
         self.stored_q_vectors = None
         self.stored_ctx_vectors = None
     
-    def _precompute_embeddings_full(self, ds_cfg_train_datasets, tensorizer, train_iterator: MultiSetDataIterator) -> Tuple[List[Optional[T]], List[Optional[T]]]:
+    def _precompute_embeddings_full(self, ds_cfg_train_datasets, tensorizer, train_iterator: MultiSetDataIterator,
+        num_hard_negatives: int) -> Tuple[List[Optional[T]], List[Optional[T]]]:
         qs = []
         pos_ctxs = []
         neg_ctxs = []
@@ -99,6 +100,9 @@ class BiEncoder(nn.Module):
         _shuffle_store = train_iterator.shuffle
         train_iterator.shuffle = False
         # ((TREC) Question Classification dataset contains 5500 labeled questions in training set and another 500 for test set.)
+
+
+        print(f"precomputing embeddings with {num_hard_negatives} hard negatives")
         
         data = train_iterator.iterate_ds_data(epoch=0)
         for i, samples_batch in tqdm.tqdm(
@@ -115,12 +119,11 @@ class BiEncoder(nn.Module):
             encoder_type = ds_cfg.encoder_type
             shuffle_positives = ds_cfg.shuffle_positives
 
-            # breakpoint() # figuring out how to specify hard negatives
             biencoder_input = self.create_biencoder_input(
                 samples=samples_batch,
                 tensorizer=tensorizer,
                 insert_title=True,
-                num_hard_negatives=(2 if self.coordinate_ascent_status == CoordinateAscentStatus.TRAIN_CTX else 0), # set to 100 to use them all!
+                num_hard_negatives=num_hard_negatives, # set to 100 to use them all!
                 num_other_negatives=0,
                 shuffle=False,
                 shuffle_positives=False,
@@ -174,12 +177,13 @@ class BiEncoder(nn.Module):
         # stack context embeddings, with all the positive ones first, so the indices should line up.
         return qs, (pos_ctxs + neg_ctxs)
     
-    def _precompute_embeddings_ctx(self, ds_cfg_train_datasets, tensorizer, train_iterator: MultiSetDataIterator) -> None:
-        print("faking ctx embeddings precomputing. how do we actually do this for all posisble contexts??")
+    def _precompute_embeddings_ctx(self, ds_cfg_train_datasets, tensorizer, train_iterator: MultiSetDataIterator, num_hard_negatives: int) -> None:
+        print(f"precomputing ctx embeddings with {num_hard_negatives} hard negatives. (how do we actually do this for all possible contexts??)")
         q_emb_list, ctx_emb_list = self._precompute_embeddings_full(
             ds_cfg_train_datasets=ds_cfg_train_datasets,
             tensorizer=tensorizer,
-            train_iterator=train_iterator
+            train_iterator=train_iterator,
+            num_hard_negatives=num_hard_negatives
         )
         assert q_emb_list[0] is None
         return torch.cat(ctx_emb_list, dim=0)
@@ -188,16 +192,18 @@ class BiEncoder(nn.Module):
         q_emb_list, ctx_emb_list = self._precompute_embeddings_full(
             ds_cfg_train_datasets=ds_cfg_train_datasets,
             tensorizer=tensorizer,
-            train_iterator=train_iterator
+            train_iterator=train_iterator,
+            num_hard_negatives=0 # no hard negatives for queries
         )
         assert (len(ctx_emb_list) == 0) or (ctx_emb_list[0] is None)
         return torch.cat(q_emb_list, dim=0)
     
-    def pre_epoch(self, ds_cfg_train_datasets, tensorizer, train_iterator: MultiSetDataIterator) -> None:
+    def pre_epoch(self, ds_cfg_train_datasets, tensorizer, train_iterator: MultiSetDataIterator, num_hard_negatives: int) -> None:
         print("BiEncoder pre_epoch() called")
         #
         #  precompute embeddings
         #
+        assert self.training # make sure we're not in eval mode
         if self.coordinate_ascent_status == CoordinateAscentStatus.TRAIN_Q:
             self.stored_q_vectors = self._precompute_embeddings_q(
                 ds_cfg_train_datasets=ds_cfg_train_datasets,
@@ -210,7 +216,8 @@ class BiEncoder(nn.Module):
             self.stored_ctx_vectors = self._precompute_embeddings_ctx(
                 ds_cfg_train_datasets=ds_cfg_train_datasets,
                 tensorizer=tensorizer,
-                train_iterator=train_iterator
+                train_iterator=train_iterator,
+                num_hard_negatives=num_hard_negatives
             )
             print("self.stored_ctx_vectors.shape =", self.stored_ctx_vectors.shape)
             self.stored_q_vectors = None
@@ -458,8 +465,8 @@ class BiEncoder(nn.Module):
 
 
 class BiEncoderNllLoss(object):
-    biencoder: BiEncoder
-    def __init__(self, biencoder: BiEncoder):
+    biencoder: Optional[BiEncoder]
+    def __init__(self, biencoder: Optional[BiEncoder] = None):
         self.biencoder = biencoder
 
     def calc(
@@ -478,7 +485,13 @@ class BiEncoderNllLoss(object):
         :return: a tuple of loss value and amount of correct predictions per batch
         """
 
-        if self.biencoder.coordinate_ascent_status == CoordinateAscentStatus.TRAIN_Q:
+        if (self.biencoder is None) or (self.biencoder.coordinate_ascent_status == CoordinateAscentStatus.DISABLED):  # regular contrastive loss
+            loss, correct_predictions_count = self._calc_contrastive_loss(
+                q_vectors=q_vectors,
+                ctx_vectors=ctx_vectors,
+                positive_idx_per_question=positive_idx_per_question,
+            )
+        elif self.biencoder.coordinate_ascent_status == CoordinateAscentStatus.TRAIN_Q:
             loss, correct_predictions_count = self._calc_ca_loss(
                 batch_vectors=q_vectors,
                 stored_vectors=self.biencoder.stored_ctx_vectors,
@@ -490,12 +503,8 @@ class BiEncoderNllLoss(object):
                 stored_vectors=self.biencoder.stored_q_vectors,
                 absolute_idxs=absolute_idxs,
             )
-        else: # regular contrastive loss
-            loss, correct_predictions_count = self._calc_contrastive_loss(
-                q_vectors=q_vectors,
-                ctx_vectors=ctx_vectors,
-                positive_idx_per_question=positive_idx_per_question,
-            )
+        else:
+            raise ValueError(f'invalid state for biencoder {self.biencoder}')
 
         if loss_scale:
             loss.mul_(loss_scale)
@@ -510,7 +519,7 @@ class BiEncoderNllLoss(object):
             loss_scale: float = None
         ) -> Tuple[T, int]:
         assert stored_vectors is not None, f"got None stored_vectors with coordinate_ascent_status {self.biencoder.coordinate_ascent_status}"
-        sims = batch_vectors @ stored_vectors.T # shape (batch_size, train_set_size)
+        sims = self.get_scores(batch_vectors, stored_vectors)
         softmax_scores = sims.log_softmax(dim=1)
 
         # print("absolute_idxs:", absolute_idxs.tolist())
