@@ -207,12 +207,13 @@ class BiEncoderTrainer(object):
         if not cfg.dev_datasets:
             validation_loss = 0
         else:
-            if epoch >= cfg.val_av_rank_start_epoch:
+            # if epoch >= cfg.val_av_rank_start_epoch:
+            # else:
+            if epoch >= 6:
                 validation_loss = self.validate_average_rank()
                 wandb.log({ "val_average_rank": validation_loss, "epoch": epoch, "step": iteration })
-            else:
-                validation_loss = self.validate_nll()
-                wandb.log({ "val_nll": validation_loss, "epoch": epoch, "step": iteration })
+            validation_loss, val_nll_ratio = self.validate_nll()
+            wandb.log({ "val_nll": validation_loss, "val_nll_ratio": val_nll_ratio, "epoch": epoch, "step": iteration })
 
         if save_cp:
             cp_name = self._save_checkpoint(scheduler, epoch, iteration)
@@ -292,7 +293,7 @@ class BiEncoderTrainer(object):
             total_samples,
             correct_ratio,
         )
-        return total_loss
+        return total_loss, correct_ratio
 
     def validate_average_rank(self) -> float:
         """
@@ -766,9 +767,9 @@ def main(cfg: DictConfig):
 
     wandb.init(
         name='biencoder_contrastive',
-        project='dpr-ca',
+        project='dpr-ca-2',
         entity='jack-morris',
-        config=cfg,
+        config=dict(cfg.train),
     )
 
     if cfg.output_dir is not None:

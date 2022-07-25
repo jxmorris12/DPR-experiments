@@ -272,7 +272,7 @@ class CsvCtxSrc(RetrieverData):
         logger.info("Reading file %s", self.file)
         with open(self.file) as ifile:
             reader = csv.reader(ifile, delimiter="\t")
-            for row in reader:
+            for idx, row in enumerate(reader):
                 # for row in ifile:
                 # row = row.strip().split("\t")
                 if row[self.id_col] == "id":
@@ -284,7 +284,7 @@ class CsvCtxSrc(RetrieverData):
                 passage = row[self.text_col].strip('"')
                 if self.normalize:
                     passage = normalize_passage(passage)
-                ctxs[sample_id] = BiEncoderPassage(passage, row[self.title_col])
+                ctxs[sample_id] = BiEncoderPassage(passage, row[self.title_col], idx)
 
 
 class KiltCsvCtxSrc(CsvCtxSrc):

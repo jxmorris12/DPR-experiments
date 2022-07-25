@@ -78,7 +78,7 @@ class BiEncoderTrainer(object):
             set_cfg_params_from_state(saved_state.encoder_params, cfg)
 
         tensorizer, model, optimizer = init_biencoder_components(cfg.encoder.encoder_model_type, cfg)
-        model.coordinate_ascent_status = CoordinateAscentStatus.TRAIN_CTX
+        model.coordinate_ascent_status = CoordinateAscentStatus.TRAIN_Q
         print("set coordinate ascent status to 2 (will switch to 1 before first epoch)")
 
         model, optimizer = setup_for_distributed_mode(
@@ -135,7 +135,7 @@ class BiEncoderTrainer(object):
                 shuffle=shuffle,
                 shuffle_seed=shuffle_seed,
                 offset=offset,
-                strict_batch_size=True, # same as drop_last=False in pytorch dataloader
+                strict_batch_size=is_train_set, # same as drop_last=False in pytorch dataloader
             )
             for ds in hydra_datasets
         ]
@@ -210,7 +210,12 @@ class BiEncoderTrainer(object):
                 train_iterator=unshuffled_train_iterator,
                 num_hard_negatives=cfg.train.precomputed_hard_negatives
             )
-            self._train_epoch(scheduler, epoch, eval_step, train_iterator)
+            train_num_correct = self._train_epoch(
+                scheduler, epoch, eval_step, train_iterator
+            )
+            wandb.log({ "coordinate_ascent_status": self.biencoder.coordinate_ascent_status, "epoch": epoch, "step": train_iterator.get_iteration() })
+            self.biencoder.post_epoch(num_correct=train_num_correct)
+
 
         if cfg.local_rank in [-1, 0]:
             logger.info("Training finished. Best validation checkpoint %s", self.best_cp_name)
@@ -226,12 +231,13 @@ class BiEncoderTrainer(object):
         if not cfg.dev_datasets:
             validation_loss = 0
         else:
-            if epoch >= cfg.val_av_rank_start_epoch:
+            # if epoch >= cfg.val_av_rank_start_epoch:
+            # else:
+            if epoch >= 6:
                 validation_loss = self.validate_average_rank()
                 wandb.log({ "val_average_rank": validation_loss, "epoch": epoch, "step": iteration })
-            else:
-                validation_loss = self.validate_nll()
-                wandb.log({ "val_nll": validation_loss, "epoch": epoch, "step": iteration })
+            validation_loss, val_nll_ratio = self.validate_nll()
+            wandb.log({ "val_nll": validation_loss, "val_nll_ratio": val_nll_ratio, "epoch": epoch, "step": iteration })
 
         if save_cp:
             cp_name = self._save_checkpoint(scheduler, epoch, iteration)
@@ -315,7 +321,8 @@ class BiEncoderTrainer(object):
             correct_ratio,
         )
         self.biencoder.coordinate_ascent_status = current_ca_status
-        return total_loss
+
+        return total_loss, correct_ratio
 
     def validate_average_rank(self) -> float:
         """
@@ -478,7 +485,7 @@ class BiEncoderTrainer(object):
 
         log_result_step = cfg.train.log_batch_step
         rolling_loss_step = cfg.train.train_rolling_loss_step
-        num_hard_negatives = cfg.train.hard_negatives
+        num_hard_negatives = 0 # OVERRIDE FOR COORDINATE ASCENT. Don't need hard negatives
         num_other_negatives = cfg.train.other_negatives
         seed = cfg.seed
         self.biencoder.train()
@@ -488,6 +495,7 @@ class BiEncoderTrainer(object):
         biencoder = get_model_obj(self.biencoder)
         dataset = 0
         for i, samples_batch in enumerate(train_data_iterator.iterate_ds_data(epoch=epoch)):
+            # print(f"epoch {epoch} train_step {i} memory usage - {torch.cuda.memory_allocated()} / {torch.cuda.max_memory_allocated()}")
             if isinstance(samples_batch, Tuple):
                 samples_batch, dataset = samples_batch
 
@@ -593,6 +601,11 @@ class BiEncoderTrainer(object):
 
         wandb.log({ "train_loss_epoch": epoch_loss, "epoch": epoch, "step": train_data_iterator.get_iteration() })
         wandb.log({ "train_num_correct": epoch_correct_predictions, "epoch": epoch, "step": train_data_iterator.get_iteration() })
+        wandb.log({ "train_pct_correct": (epoch_correct_predictions / (cfg.train.batch_size * epoch_batches)), "epoch": epoch, "step": train_data_iterator.get_iteration() })
+
+        return epoch_correct_predictions
+
+
 
 
     def _save_checkpoint(self, scheduler, epoch: int, offset: int) -> str:
@@ -769,8 +782,8 @@ def main(cfg: DictConfig):
         )
     
     wandb.init(
-        name='biencoder_ca',
-        project='dpr-ca',
+        name=f'biencoder_ca_{cfg.train.precomputed_hard_negatives}hn',
+        project='dpr-ca-2',
         entity='jack-morris',
         config=dict(cfg.train),
     )

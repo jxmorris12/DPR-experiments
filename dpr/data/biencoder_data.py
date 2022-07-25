@@ -101,10 +101,12 @@ class JsonQADataset(Dataset):
                 ctx["title"] = None
 
         def create_passage(ctx: dict):
+            assert (("psg_id" in ctx.keys()) or ("passage_id" in ctx.keys())), f"invalid keys {ctx_keys}"
+            passage_id = ctx.get("psg_id", ctx.get("passage_id"))
             return BiEncoderPassage(
                 normalize_passage(ctx["text"]) if self.normalize else ctx["text"],
                 ctx["title"],
-                index
+                int(passage_id)
             )
 
         r.positive_passages = [create_passage(ctx) for ctx in positive_ctxs]
