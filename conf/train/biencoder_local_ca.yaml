@@ -1,6 +1,7 @@
 # @package _group_
 
-batch_size: 16
+batch_size: 32
+# batch_size: 16
 # batch_size: 8
 dev_batch_size: 64
 adam_eps: 1e-8
@@ -14,8 +15,8 @@ learning_rate: 1e-5
 
 # Linear warmup over warmup_steps.
 # warmup_steps: 2474 # bs 8
-warmup_steps: 1237 # bs 16
-# warmup_steps: 618 # bs 32
+# warmup_steps: 1237 # bs 16
+warmup_steps: 618 # bs 32
 # warmup_steps: 309 # bs 64
 
 # Number of updates steps to accumulate before performing a backward/update pass.
@@ -25,7 +26,7 @@ shuffle_positives_override: True
 # Total number of training epochs to perform.
 num_train_epochs: 100
 eval_per_epoch: 1
-hard_negatives: 1 # used during epoch val nll_loss calc
+hard_negatives: 1 # still used during epoch val nll_loss calc
 precomputed_hard_negatives: 1 # precomputed before epoch
 # precomputed_hard_negatives: 2 # precomputed before epoch
 # precomputed_hard_negatives: 8 # precomputed before epoch

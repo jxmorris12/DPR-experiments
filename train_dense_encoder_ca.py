@@ -78,7 +78,8 @@ class BiEncoderTrainer(object):
             set_cfg_params_from_state(saved_state.encoder_params, cfg)
 
         tensorizer, model, optimizer = init_biencoder_components(cfg.encoder.encoder_model_type, cfg)
-        model.coordinate_ascent_status = CoordinateAscentStatus.TRAIN_Q
+        # model.coordinate_ascent_status = CoordinateAscentStatus.TRAIN_Q
+        model.coordinate_ascent_status = CoordinateAscentStatus.TRAIN_CTX
         print("set coordinate ascent status to 2 (will switch to 1 before first epoch)")
 
         model, optimizer = setup_for_distributed_mode(
@@ -234,7 +235,7 @@ class BiEncoderTrainer(object):
         else:
             # if epoch >= cfg.val_av_rank_start_epoch:
             # else:
-            avg_rank_start_epoch = 6
+            avg_rank_start_epoch = 3
             if epoch >= avg_rank_start_epoch:
                 validation_loss = self.validate_average_rank()
                 wandb.log({ "val_average_rank": validation_loss, "epoch": epoch, "step": iteration })
@@ -271,10 +272,12 @@ class BiEncoderTrainer(object):
         dataset = 0
         biencoder = get_model_obj(self.biencoder)
 
+        print(f"validate_nll num_hard_negatives = {num_hard_negatives} / num_other_negatives = {num_other_negatives}")
 
         current_ca_status = self.biencoder.coordinate_ascent_status
         self.biencoder.coordinate_ascent_status = CoordinateAscentStatus.DISABLED # DISABLED
         for i, samples_batch in enumerate(data_iterator.iterate_ds_data()):
+            # print(f"validate_nll step {i} memory usage - {torch.cuda.memory_allocated()} / {torch.cuda.max_memory_allocated()}")
             if isinstance(samples_batch, Tuple):
                 samples_batch, dataset = samples_batch
             logger.info("Eval step: %d ,rnk=%s", i, cfg.local_rank)
@@ -282,10 +285,11 @@ class BiEncoderTrainer(object):
             biencoder_input = biencoder.create_biencoder_input(
                 samples_batch,
                 self.tensorizer,
-                True,
-                num_hard_negatives,
-                num_other_negatives,
+                insert_title=True,
+                num_hard_negatives=num_hard_negatives,
+                num_other_negatives=num_other_negatives,
                 shuffle=False,
+                shuffle_positives=False,
             )
 
             # get the token to be used for representation selection
@@ -293,14 +297,15 @@ class BiEncoderTrainer(object):
             rep_positions = ds_cfg.selector.get_positions(biencoder_input.question_ids, self.tensorizer)
             encoder_type = ds_cfg.encoder_type
 
-            loss, correct_cnt = _do_biencoder_fwd_pass(
-                self.biencoder,
-                biencoder_input,
-                self.tensorizer,
-                cfg,
-                encoder_type=encoder_type,
-                rep_positions=rep_positions,
-            )
+            with torch.no_grad():
+                loss, correct_cnt = _do_biencoder_fwd_pass(
+                    self.biencoder,
+                    biencoder_input,
+                    self.tensorizer,
+                    cfg,
+                    encoder_type=encoder_type,
+                    rep_positions=rep_positions,
+                )
             total_loss += loss.item()
             total_correct_predictions += correct_cnt
             batches += 1
@@ -476,7 +481,8 @@ class BiEncoderTrainer(object):
 
         log_result_step = cfg.train.log_batch_step
         rolling_loss_step = cfg.train.train_rolling_loss_step
-        num_hard_negatives = 0 # OVERRIDE FOR COORDINATE ASCENT. Don't need hard negatives
+        num_hard_negatives = 0  # OVERRIDE FOR COORDINATE ASCENT.
+                                # Don't need hard negatives during this forward pass.
         num_other_negatives = cfg.train.other_negatives
         seed = cfg.seed
         self.biencoder.train()
@@ -654,7 +660,8 @@ def _calc_loss(
     local_ctx_vectors,
     local_positive_idxs,
     local_hard_negatives_idxs: list = None,
-    absolute_idxs: Optional[T] = None,
+    query_absolute_idxs: Optional[T] = None,
+    passage_absolute_idxs: Optional[T] = None,
     loss_scale: float = None,
 ) -> Tuple[T, bool]:
     """
@@ -676,7 +683,8 @@ def _calc_loss(
         global_ctxs_vector,
         positive_idx_per_question,
         hard_negatives_per_question,
-        absolute_idxs=absolute_idxs,
+        query_absolute_idxs=query_absolute_idxs,
+        passage_absolute_idxs=passage_absolute_idxs,
         loss_scale=loss_scale,
     )
 
@@ -751,7 +759,8 @@ def _do_biencoder_fwd_pass(
         local_ctx_vectors,
         input.is_positive,
         input.hard_negatives,
-        absolute_idxs=input.query_absolute_idxs,
+        query_absolute_idxs=input.query_absolute_idxs,
+        passage_absolute_idxs=input.positive_passage_absolute_idxs,
         loss_scale=loss_scale,
     )
     is_correct = is_correct.sum().item()

@@ -82,6 +82,8 @@ class CoordinateAscentStatus:
 class BiEncoder(nn.Module):
     """Bi-Encoder model component. Encapsulates query/question and context/passage encoders."""
     _most_recent_num_correct: Dict[CoordinateAscentStatus, int]
+    _ctx_idx_to_query_idx: Dict[int, Set[int]]
+    _query_idx_to_ctx_idx: Dict[int, Set[int]]
 
     def __init__(
         self,
@@ -99,22 +101,68 @@ class BiEncoder(nn.Module):
         # *** variables used for coordinate ascent ***
         self.coordinate_ascent_status = coordinate_ascent_status
         self.stored_q_vectors = None
+        self.stored_q_idxs = None
         self.stored_ctx_vectors = None
+        self.stored_ctx_idxs = None
         self._most_recent_num_correct = { CoordinateAscentStatus.TRAIN_Q: 0, CoordinateAscentStatus.TRAIN_CTX: 0 }
-        self._positive_passage_idxs = None
+        # During precomputing, store the absolute indices of the precomputed stuff, so we can determine
+        # if there are multiple things associated with it later.
+        self._pos_ctx_idxs = None
+        self._query_idxs = None
+
+        # For each passage index in the dataset, we store the indices of associated queries.
+        self._ctx_idx_to_query_idx = collections.defaultdict(set)
+        self._query_idx_to_ctx_idx = collections.defaultdict(set)
 
         self.use_min_criteria_for_toggle = True
     
     def _get_positive_passage_idxs(self, train_iterator: MultiSetDataIterator) -> Set[int]:
-        if self._positive_passage_idxs is None:
+        """
+        'What body of water does the Colorado River flow into?' and 
+        'What body of water does the Colorado River empty into?'
+
+        are both in TREC...
+        """
+        if not len(self._ctx_idx_to_query_idx):
             print("Getting indices of all positive passages...(we only do this once)...")
             self._positive_passage_idxs = set()
             data = train_iterator.iterate_ds_data(epoch=0)
+            i = 0
+            idx_to_sample = {}
+            positive_ctx_idx_to_query_idxs = collections.defaultdict(set)
             for batch, _dataset_idx in data:
                 for sample in batch:
+                    idx_to_sample[sample.query_idx] = sample
                     for positive_passage in sample.positive_passages:
-                        self._positive_passage_idxs.add(positive_passage.index)
-        return self._positive_passage_idxs
+                        positive_ctx_idx_to_query_idxs[positive_passage.index].add(i)
+                        self._ctx_idx_to_query_idx[positive_passage.index].add(sample.query_idx)
+                        self._query_idx_to_ctx_idx[sample.query_idx].add(positive_passage.index)
+
+            # 
+            # overlap in positive passages is bad.
+            # determined that 355 / 1127 (30.8%) of queries in TREC have a different query with a shared
+            # positive. maybe this isn't a big deal in the contrastive loss (although it probably is) but
+            # it is a HUGE deal for full softmax since that means literally 30.8% of the time the model has to
+            # resort to random guessing.
+            # 
+            # but on the other hand, only 898/15190 (5.9%) of positive passages in TREC are associated
+            # with more than one thing.
+            # 
+            # there are also some really noisy things in this dataset:
+            # (Pdb) p idx_to_sample[418].query
+            # 
+            # 'How many people does Honda employ in the U.S.?'
+            # (Pdb) p idx_to_sample[418].positive_passages[0]
+            # 
+            # BiEncoderPassage(text='words \'How R U Doin?\' appearing on-screen one last time. How R U Doin? "How R U Doin?" is a song by Danish-Norwegian pop group Aqua from their third studio album, "Megalomania". It was released as the album\'s lead single on 14 March 2011. The song peaked at number four in Denmark, becoming the group\'s tenth top-ten single. It has since been certified gold by the International Federation of the Phonographic Industry (IFPI) for sales of 15,000 copies. On 9 March 2011 Aqua posted the single artwork to "How R U Doin?" on their Facebook page with the date "14.03.2011".', title='How R U Doin?', index=15429849)
+            # (Pdb) p idx_to_sample[418].positive_passages[1]
+            # BiEncoderPassage(text='How R U Doin? "How R U Doin?" is a song by Danish-Norwegian pop group Aqua from their third studio album, "Megalomania". It was released as the album\'s lead single on 14 March 2011. The song peaked at number four in Denmark, becoming the group\'s tenth top-ten single. It has since been certified gold by the International Federation of the Phonographic Industry (IFPI) for sales of 15,000 copies. On 9 March 2011 Aqua posted the single artwork to "How R U Doin?" on their Facebook page with the date "14.03.2011". The Europop song was written by Søren Rasted, Claus Norreen,', title='How R U Doin?', index=15429847)
+            # 
+
+            # store equivalent idxs for each thing in the dataset. 
+            multipassages = {k: v for k,v in self._ctx_idx_to_query_idx.items() if len(v) > 1}
+
+        return self._ctx_idx_to_query_idx.keys()
 
     
     def _precompute_embeddings_full(
@@ -124,17 +172,18 @@ class BiEncoder(nn.Module):
         # print("precompute embeddings - printing tensors:")
         # _print_tensors()
         torch.cuda.empty_cache() 
-        qs = []
+        query_vectors = []
         pos_ctxs = []
         neg_ctxs = []
 
         train_iterator.shuffle = False
-        # ((TREC) Question Classification dataset contains 5500 labeled questions in training set and another 500 for test set.)
 
-
+        # ((TREC) Question Classification dataset contains 5500 labeled questions in training set and 
+        # another 500 for test set.)
         print(f"precomputing embeddings with {num_hard_negatives} hard negatives")
         
         data = train_iterator.iterate_ds_data(epoch=0)
+        query_idxs = []
         positive_passage_idxs = []
         negative_passage_idxs = []
         already_seen_idxs = set()
@@ -142,7 +191,7 @@ class BiEncoder(nn.Module):
             train_iterator=train_iterator
         )
 
-        print("TODO: consider using non-hard negatives as well in training.")
+        print("TODO: consider using 'regular' negatives as well in training.")
 
         assert len(ds_cfg.train_datasets) == 1
         ds_cfg = ds_cfg.train_datasets[0]
@@ -227,17 +276,12 @@ class BiEncoder(nn.Module):
                     representation_token_pos=rep_positions,
                     coordinate_ascent_status=coordinate_ascent_status
                 )
-            
-            if (local_q_vector is not None):
-                qs.append(local_q_vector.cpu())
 
             # TODO: make this block of code more idiomatic pytorch.
+            # Collect context vectors.
             if (local_ctx_vectors is not None) and len(local_ctx_vectors) > 0:
                 # Track indices of all the passage idxs.
-                new_positive_passage_idxs = [
-                    idxs[0].item()
-                    for idxs in biencoder_input.positive_passage_absolute_idxs
-                ]
+                new_positive_passage_idxs = biencoder_input.positive_passage_absolute_idxs
                 positive_passage_idxs.extend(new_positive_passage_idxs)
 
                 new_negative_passage_idxs = [
@@ -259,31 +303,36 @@ class BiEncoder(nn.Module):
                 if len(new_negative_passage_idxs) != len(new_neg_ctxs):
                     import pdb; pdb.set_trace()
                     raise RuntimeError(f'got {new_negative_passage_idxs} idxs and {new_neg_ctxs} embeddings')
+            else:
+                # Otherwise, we're precomputing queries - collect query vectors and indices.
+                assert (local_q_vector is not None), "need local_q_vector because we're precomputing queries"
+                query_vectors.append(local_q_vector.cpu())
+                query_idxs.append(biencoder_input.query_absolute_idxs.cpu())
 
             # if i == train_iterator.get_max_iterations()-1: import pdb; pdb.set_trace()
 
-        # Filter out negative contexts that have IDs that appear in positive contexts.
+        print("Done precomputing - computing overlaps...")
         if len(negative_passage_idxs) > 0:
+            # Ensure no negative contexts that have IDs that appear in positive contexts.
             positive_passage_idxs = torch.tensor(positive_passage_idxs)
             negative_passage_idxs = torch.tensor(negative_passage_idxs)
             negative_ctxs_duplicate_mask = (
                 negative_passage_idxs[:, None] == positive_passage_idxs[None, :]
             ).any(dim=1)
-            ## TODO: Make this masking bit better pytorch
-            neg_ctxs = torch.cat(neg_ctxs).masked_select(
-                ~negative_ctxs_duplicate_mask[..., None]
-            ).reshape((-1, 768))
-            print(f"filtered duplicates from negative contexts: {len(negative_passage_idxs)} -> {len(neg_ctxs)}")
-
-            # stack context embeddings, with all the positive ones first, so the indices should line up
-            # fine during training.
-            all_ctxs = torch.cat(
-                (torch.cat(pos_ctxs), neg_ctxs), dim=0
-            )
+            assert negative_ctxs_duplicate_mask.sum() == 0, "found negative contexts that were already positive contexts"
+            
+            all_ctxs = torch.cat((pos_ctxs + neg_ctxs), dim=0)
+            # Store indices for positive contexts. This lets us figure out
+            # *all* the queries that correspond to it later.
+            self._pos_ctx_idxs = positive_passage_idxs
+            self._query_idxs = None
         else:
-            qs = torch.cat(qs, dim=0)
+            query_vectors = torch.cat(query_vectors, dim=0)
             all_ctxs = []
-        return qs, all_ctxs
+            # Store indices for queries.
+            self._pos_ctx_idxs = None
+            self._query_idxs = torch.cat(query_idxs).cpu()
+        return query_vectors, all_ctxs
     
     def _precompute_embeddings_ctx(self, cfg, ds_cfg, tensorizer, train_iterator: MultiSetDataIterator, num_hard_negatives: int) -> None:
         print(f"precomputing ctx embeddings with {num_hard_negatives} hard negatives. (how do we actually do this for all possible contexts??)")
@@ -314,7 +363,7 @@ class BiEncoder(nn.Module):
     
     def pre_epoch(self, cfg, ds_cfg, tensorizer, train_iterator: MultiSetDataIterator, num_hard_negatives: int) -> None:
         print("BiEncoder pre_epoch() called")
-        print(f"pre_epoch memory usage - {torch.cuda.memory_allocated()} / {torch.cuda.max_memory_allocated()}")
+        print(f"pre_epoch memory usage [before precomputing] - {torch.cuda.memory_allocated()} / {torch.cuda.max_memory_allocated()}")
         #
         #  precompute embeddings
         #
@@ -349,7 +398,8 @@ class BiEncoder(nn.Module):
         # we were still in the prev mode so that the model returned None
         # for the other type.
         # self._toggle_ca_status()
-        print("post epoch self.coordinate_ascent_status =", self.coordinate_ascent_status)
+        print(f"pre_epoch memory usage [after precomputing] - {torch.cuda.memory_allocated()} / {torch.cuda.max_memory_allocated()}")
+        print("pre_epoch self.coordinate_ascent_status =", self.coordinate_ascent_status)
 
     def post_epoch(self, num_correct: int) -> CoordinateAscentStatus:
         """Toggles status based on num_correct. Sets status to the status which most recently
@@ -360,6 +410,7 @@ class BiEncoder(nn.Module):
         Returns:
             status (CoordinateAscentStatus): status of the encoder for the next epoch
         """
+        print(f"post_epoch memory usage - {torch.cuda.memory_allocated()} / {torch.cuda.max_memory_allocated()}")
         if self.use_min_criteria_for_toggle:
             self._most_recent_num_correct[self.coordinate_ascent_status] = num_correct
             self.coordinate_ascent_status = min(self._most_recent_num_correct, key=self._most_recent_num_correct.get)
@@ -540,7 +591,7 @@ class BiEncoder(nn.Module):
             ########################################################
             query_absolute_idxs.append(sample.query_idx)
             positive_passage_absolute_idxs.append(
-                torch.tensor([p.index for p in sample.positive_passages])
+                positive_ctx.index
             )
             negative_passage_absolute_idxs.append(
                 torch.tensor([p.index for p in sample.negative_passages])
@@ -605,6 +656,36 @@ class BiEncoderNllLoss(object):
     biencoder: Optional[BiEncoder]
     def __init__(self, biencoder: Optional[BiEncoder] = None):
         self.biencoder = biencoder
+    
+    def _get_true_mask_for_query(self, query_absolute_idxs) -> T:
+        assert self.biencoder._pos_ctx_idxs is not None
+        mask = []
+        for query_idx in query_absolute_idxs.tolist():
+            ctx_idxs = list(self.biencoder._query_idx_to_ctx_idx[query_idx])
+            assert len(ctx_idxs) > 0, f"got 0 contexts for query idx {query_idx}"
+            mask.append(
+                (
+                    self.biencoder._pos_ctx_idxs[:, None] == torch.tensor(ctx_idxs)[None, :]
+                ).any(dim=1)
+            )
+        out_mask = torch.stack(mask).cuda()
+        assert (out_mask.sum(1) > 0).all()
+        return out_mask
+    
+    def _get_true_mask_for_context(self, context_absolute_idxs) -> T:
+        assert self.biencoder._query_idxs is not None
+        mask = []
+        for context_idx in context_absolute_idxs:
+            query_idxs = list(self.biencoder._ctx_idx_to_query_idx[context_idx])
+            assert len(query_idxs) > 0, f"got 0 queries for context idx {context_idx}"
+            mask.append(
+                (
+                    self.biencoder._query_idxs[:, None] == torch.tensor(query_idxs)[None, :]
+                ).any(dim=1)
+            )
+        out_mask = torch.stack(mask).cuda()
+        assert (out_mask.sum(1) > 0).all()
+        return out_mask
 
     def calc(
         self,
@@ -612,7 +693,8 @@ class BiEncoderNllLoss(object):
         ctx_vectors: T,
         positive_idx_per_question: list,
         hard_negative_idx_per_question: list = None,
-        absolute_idxs: Optional[T] = None,
+        query_absolute_idxs: Optional[T] = None,
+        passage_absolute_idxs: Optional[T] = None,
         loss_scale: float = None,
     ) -> Tuple[T, int]:
         """
@@ -628,20 +710,22 @@ class BiEncoderNllLoss(object):
                 ctx_vectors=ctx_vectors,
                 positive_idx_per_question=positive_idx_per_question,
             )
-        elif self.biencoder.coordinate_ascent_status == CoordinateAscentStatus.TRAIN_Q:
-            loss, correct_predictions_count = self._calc_ca_loss(
-                batch_vectors=q_vectors,
-                stored_vectors=self.biencoder.stored_ctx_vectors,
-                absolute_idxs=absolute_idxs,
-            )
-        elif self.biencoder.coordinate_ascent_status == CoordinateAscentStatus.TRAIN_CTX:
-            loss, correct_predictions_count = self._calc_ca_loss(
-                batch_vectors=ctx_vectors,
-                stored_vectors=self.biencoder.stored_q_vectors,
-                absolute_idxs=absolute_idxs,
-            )
         else:
-            raise ValueError(f'invalid state for biencoder {self.biencoder}')
+            if self.biencoder.coordinate_ascent_status == CoordinateAscentStatus.TRAIN_Q:
+                loss, correct_predictions_count = self._calc_ca_loss(
+                    batch_vectors=q_vectors,
+                    stored_vectors=self.biencoder.stored_ctx_vectors,
+                    true_idx_mask=self._get_true_mask_for_query(query_absolute_idxs),
+                    absolute_idxs=query_absolute_idxs
+                )
+            else:
+                assert self.biencoder.coordinate_ascent_status == CoordinateAscentStatus.TRAIN_CTX
+                loss, correct_predictions_count = self._calc_ca_loss(
+                    batch_vectors=ctx_vectors,
+                    stored_vectors=self.biencoder.stored_q_vectors,
+                    true_idx_mask=self._get_true_mask_for_context(passage_absolute_idxs),
+                    absolute_idxs=query_absolute_idxs,
+                )
 
         if loss_scale:
             loss.mul_(loss_scale)
@@ -652,26 +736,45 @@ class BiEncoderNllLoss(object):
             self,
             batch_vectors: T,
             stored_vectors: T,
+            true_idx_mask: T,
             absolute_idxs: T,
             loss_scale: float = None
         ) -> Tuple[T, int]:
+        """Computes full softmax over all `stored_vectors`.
+
+        Also tries to take into account false positives, where a context passage
+        actually corresponds to more than one query.
+        """
         assert stored_vectors is not None, f"got None stored_vectors with coordinate_ascent_status {self.biencoder.coordinate_ascent_status}"
         sims = self.get_scores(batch_vectors, stored_vectors)
-        softmax_scores = sims.log_softmax(dim=1)
+        # softmax_scores = sims.log_softmax(dim=1)
 
+        # import pdb; pdb.set_trace()
+
+        # We need to normalize the labels so that they
+        # are on the simplex, i.e. they look like
+        # [0.25, 0, 0, 0.25, 0.25, 0.25] instead of
+        # [1, 0, 0, 1, 1, 1].
+        true_labels = (
+            true_idx_mask.to(int) / true_idx_mask.to(int).sum(1)[:,None]
+        ).sum(1).long()
+
+        # import pdb; pdb.set_trace()
+        loss = nn.CrossEntropyLoss()(sims, true_labels)
         # print("absolute_idxs:", absolute_idxs.tolist())
         # print("softmax_scores.shape:", softmax_scores.shape, "absolute_idxs.shape:", absolute_idxs.shape)
-        loss = F.nll_loss(
-            softmax_scores,
-            absolute_idxs.to(softmax_scores.device),
-            reduction="mean",
-        )
+        # loss = F.nll_loss(
+        #     softmax_scores,
+        #     query_absolute_idxs.to(softmax_scores.device),
+        #     reduction="mean",
+        # )
 
-        _max_score, max_idxs = torch.max(softmax_scores, 1)
+
+        # todo: how to compute this w/ multiple correct idxs?
+        _max_score, max_idxs = torch.max(sims, 1)
         correct_predictions_count = (
             max_idxs == absolute_idxs.to(max_idxs.device)
         ).sum()
-
         return loss, correct_predictions_count
 
     
