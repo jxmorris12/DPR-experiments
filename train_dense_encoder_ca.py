@@ -205,15 +205,16 @@ class BiEncoderTrainer(object):
             logger.info("***** Epoch %d *****", epoch)
             self.biencoder.train()
             self.biencoder.pre_epoch(
-                ds_cfg_train_datasets=self.ds_cfg.train_datasets,
+                cfg=self.cfg,
+                ds_cfg=self.ds_cfg,
                 tensorizer=self.tensorizer,
                 train_iterator=unshuffled_train_iterator,
                 num_hard_negatives=cfg.train.precomputed_hard_negatives
             )
+            wandb.log({ "coordinate_ascent_status": self.biencoder.coordinate_ascent_status, "epoch": epoch, "step": train_iterator.get_iteration() })
             train_num_correct = self._train_epoch(
                 scheduler, epoch, eval_step, train_iterator
             )
-            wandb.log({ "coordinate_ascent_status": self.biencoder.coordinate_ascent_status, "epoch": epoch, "step": train_iterator.get_iteration() })
             self.biencoder.post_epoch(num_correct=train_num_correct)
 
 
@@ -233,7 +234,8 @@ class BiEncoderTrainer(object):
         else:
             # if epoch >= cfg.val_av_rank_start_epoch:
             # else:
-            if epoch >= 6:
+            avg_rank_start_epoch = 6
+            if epoch >= avg_rank_start_epoch:
                 validation_loss = self.validate_average_rank()
                 wandb.log({ "val_average_rank": validation_loss, "epoch": epoch, "step": iteration })
             validation_loss, val_nll_ratio = self.validate_nll()
@@ -455,17 +457,6 @@ class BiEncoderTrainer(object):
             gold_idx = (indices[i] == idx).nonzero()
             rank += gold_idx.item()
 
-        # DELME
-        # if distributed_factor > 1:
-        #     # each node calcuated its own rank, exchange the information between node and calculate the "global" average rank
-        #     # NOTE: the set of passages is still unique for every node
-        #     eval_stats = all_gather_list([rank, q_num], max_size=100)
-        #     for i, item in enumerate(eval_stats):
-        #         remote_rank, remote_q_num = item
-        #         if i != cfg.local_rank:
-        #             rank += remote_rank
-        #             q_num += remote_q_num
-
         av_rank = float(rank / q_num)
         logger.info("Av.rank validation: average rank %s, total questions=%d", av_rank, q_num)
         self.biencoder.coordinate_ascent_status = current_ca_status
@@ -502,7 +493,7 @@ class BiEncoderTrainer(object):
             ds_cfg = self.ds_cfg.train_datasets[dataset]
             special_token = ds_cfg.special_token
             encoder_type = ds_cfg.encoder_type
-            shuffle_positives = ds_cfg.shuffle_positives
+            shuffle_positives = cfg.train.shuffle_positives_override
 
             # to be able to resume shuffled ctx- pools
             data_iteration = train_data_iterator.get_iteration()
@@ -774,6 +765,10 @@ def _do_biencoder_fwd_pass(
 
 @hydra.main(config_path="conf", config_name="biencoder_train_cfg")
 def main(cfg: DictConfig):
+    ##################################################################################################
+    print(f"setting shuffle_positives = {cfg.train.shuffle_positives_override} everywhere")
+    ##################################################################################################
+
     if cfg.train.gradient_accumulation_steps < 1:
         raise ValueError(
             "Invalid gradient_accumulation_steps parameter: {}, should be >= 1".format(
@@ -821,5 +816,6 @@ if __name__ == "__main__":
             hydra_formatted_args.append(arg)
     logger.info("Hydra formatted Sys.argv: %s", hydra_formatted_args)
     sys.argv = hydra_formatted_args
+
 
     main()
