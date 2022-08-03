@@ -64,8 +64,9 @@ def dot_product_scores(q_vectors: T, ctx_vectors: T) -> T:
     :return:
     """
     # q_vector: n1 x D, ctx_vectors: n2 x D, result n1 x n2
-    r = torch.matmul(q_vectors, torch.transpose(ctx_vectors, 0, 1))
-    return r
+    # r = torch.matmul(q_vectors, ctx_vectors.T)
+    # return r
+    return torch.matmul(q_vectors, ctx_vectors.T)
 
 
 def cosine_scores(q_vector: T, ctx_vectors: T):
@@ -109,12 +110,16 @@ class BiEncoder(nn.Module):
         # if there are multiple things associated with it later.
         self._pos_ctx_idxs = None
         self._query_idxs = None
+        self._num_positive_samples = None
 
         # For each passage index in the dataset, we store the indices of associated queries.
         self._ctx_idx_to_query_idx = collections.defaultdict(set)
         self._query_idx_to_ctx_idx = collections.defaultdict(set)
 
-        self.use_min_criteria_for_toggle = True
+        self.use_min_criteria_for_toggle = None # will be overriden in train_...
+
+        # index of stored negative passages corresponding to each stored positive passage.
+        self._stored_negative_passage_idxs_by_query_idx = None # will be overriden each time we get positive passage
     
     def _get_positive_passage_idxs(self, train_iterator: MultiSetDataIterator) -> Set[int]:
         """
@@ -138,6 +143,7 @@ class BiEncoder(nn.Module):
                         self._ctx_idx_to_query_idx[positive_passage.index].add(sample.query_idx)
                         self._query_idx_to_ctx_idx[sample.query_idx].add(positive_passage.index)
 
+            # import pdb; pdb.set_trace()
             # 
             # overlap in positive passages is bad.
             # determined that 355 / 1127 (30.8%) of queries in TREC have a different query with a shared
@@ -195,6 +201,11 @@ class BiEncoder(nn.Module):
 
         assert len(ds_cfg.train_datasets) == 1
         ds_cfg = ds_cfg.train_datasets[0]
+
+        self._stored_negative_passage_idxs_by_query_idx = collections.defaultdict(list)
+
+        num_stored_negatives = 0 
+        self._num_positive_samples = 0
         for i, samples_batch in tqdm.tqdm(
             enumerate(data),
             colour="red", leave=False,
@@ -211,6 +222,7 @@ class BiEncoder(nn.Module):
             shuffle_positives = cfg.train.shuffle_positives_override
 
             for sample in samples_batch:
+                self._num_positive_samples += 1
                 # Filter out stuff we've already seen.
                 sample.hard_negative_passages = [
                     hn for hn in sample.hard_negative_passages
@@ -223,6 +235,10 @@ class BiEncoder(nn.Module):
                 ) 
                 for hn in sample.hard_negative_passages:
                     already_seen_idxs.add(hn.index)
+                    self._stored_negative_passage_idxs_by_query_idx[sample.query_idx].append(
+                        num_stored_negatives
+                    )
+                    num_stored_negatives += 1
 
             biencoder_input = self.create_biencoder_input(
                 samples=samples_batch,
@@ -312,26 +328,32 @@ class BiEncoder(nn.Module):
             # if i == train_iterator.get_max_iterations()-1: import pdb; pdb.set_trace()
 
         print("Done precomputing - computing overlaps...")
-        if len(negative_passage_idxs) > 0:
-            # Ensure no negative contexts that have IDs that appear in positive contexts.
-            positive_passage_idxs = torch.tensor(positive_passage_idxs)
-            negative_passage_idxs = torch.tensor(negative_passage_idxs)
-            negative_ctxs_duplicate_mask = (
-                negative_passage_idxs[:, None] == positive_passage_idxs[None, :]
-            ).any(dim=1)
-            assert negative_ctxs_duplicate_mask.sum() == 0, "found negative contexts that were already positive contexts"
-            
-            all_ctxs = torch.cat((pos_ctxs + neg_ctxs), dim=0)
-            # Store indices for positive contexts. This lets us figure out
-            # *all* the queries that correspond to it later.
-            self._pos_ctx_idxs = positive_passage_idxs
-            self._query_idxs = None
-        else:
+
+        if len(query_vectors) > 0:
             query_vectors = torch.cat(query_vectors, dim=0)
             all_ctxs = []
             # Store indices for queries.
             self._pos_ctx_idxs = None
             self._query_idxs = torch.cat(query_idxs).cpu()
+        else:
+            # Ensure no negative contexts that have IDs that appear in positive contexts.
+            positive_passage_idxs = torch.tensor(positive_passage_idxs)
+            if len(negative_passage_idxs) > 0:
+                # no negative examples.
+                all_ctxs = torch.cat(pos_ctxs, dim=0)
+            else:
+                negative_passage_idxs = torch.tensor(negative_passage_idxs)
+                negative_ctxs_duplicate_mask = (
+                    negative_passage_idxs[:, None] == positive_passage_idxs[None, :]
+                ).any(dim=1)
+                assert negative_ctxs_duplicate_mask.sum() == 0, "found negative contexts that were already positive contexts"
+                
+                all_ctxs = torch.cat((pos_ctxs + neg_ctxs), dim=0)
+                # Store indices for positive contexts. This lets us figure out
+                # *all* the queries that correspond to it later.
+            self._pos_ctx_idxs = positive_passage_idxs
+            self._query_idxs = None
+
         return query_vectors, all_ctxs
     
     def _precompute_embeddings_ctx(self, cfg, ds_cfg, tensorizer, train_iterator: MultiSetDataIterator, num_hard_negatives: int) -> None:
@@ -424,7 +446,7 @@ class BiEncoder(nn.Module):
         #   advance coordinate ascent status
         #
         if self.coordinate_ascent_status == CoordinateAscentStatus.TRAIN_Q:
-            #    training query encoder -train ctx next
+            #    training query encoder - train ctx next
             self.coordinate_ascent_status = CoordinateAscentStatus.TRAIN_CTX
         elif self.coordinate_ascent_status == CoordinateAscentStatus.TRAIN_CTX:
             #    training context encoder - train query next
@@ -647,6 +669,7 @@ class BiEncoder(nn.Module):
         #    del saved_state.model_dict["question_model.embeddings.position_ids"]
         #    del saved_state.model_dict["ctx_model.embeddings.position_ids"]
         self.load_state_dict(saved_state.model_dict, strict=strict)
+        print("*** Loaded state dict ***")
 
     def get_state_dict(self):
         return self.state_dict()
@@ -745,22 +768,45 @@ class BiEncoderNllLoss(object):
         Also tries to take into account false positives, where a context passage
         actually corresponds to more than one query.
         """
+
         assert stored_vectors is not None, f"got None stored_vectors with coordinate_ascent_status {self.biencoder.coordinate_ascent_status}"
+        USE_FULL_SOFTMAX = False
+
+        if not USE_FULL_SOFTMAX:
+            # Get indices of all negative samples so we can include them in the loss too
+            neg_idxs = []
+            for idx in absolute_idxs.cpu().tolist():
+                neg_idxs.extend(self.biencoder._stored_negative_passage_idxs_by_query_idx[idx])
+            if len(neg_idxs) > 0:
+                neg_idxs = torch.tensor(neg_idxs) + self.biencoder._num_positive_samples
+                all_sample_idxs = torch.cat((absolute_idxs, neg_idxs), dim=0)
+            else:
+                all_sample_idxs = absolute_idxs
+            import pdb; pdb.set_trace()
+            stored_vectors = stored_vectors[all_sample_idxs]
+            true_idx_mask = true_idx_mask[absolute_idxs]
+
+        
         sims = self.get_scores(batch_vectors, stored_vectors)
         # softmax_scores = sims.log_softmax(dim=1)
-
         # import pdb; pdb.set_trace()
 
         # We need to normalize the labels so that they
         # are on the simplex, i.e. they look like
         # [0.25, 0, 0, 0.25, 0.25, 0.25] instead of
         # [1, 0, 0, 1, 1, 1].
-        true_labels = (
-            true_idx_mask.to(int) / true_idx_mask.to(int).sum(1)[:,None]
-        ).sum(1).long()
+        positive_labels = (true_idx_mask.float() / true_idx_mask.sum(1)[:, None].float()).float()
 
-        # import pdb; pdb.set_trace()
-        loss = nn.CrossEntropyLoss()(sims, true_labels)
+        batch_size = sims.shape[0]
+        num_neg_ctxs = sims.shape[1] - positive_labels.shape[1]
+        negative_labels = torch.zeros(batch_size, num_neg_ctxs).to(positive_labels.device)
+
+        all_labels = torch.cat(
+            (positive_labels, negative_labels), dim=1
+        )
+        assert all_labels.shape == sims.shape
+
+        loss = nn.CrossEntropyLoss()(sims, all_labels)
         # print("absolute_idxs:", absolute_idxs.tolist())
         # print("softmax_scores.shape:", softmax_scores.shape, "absolute_idxs.shape:", absolute_idxs.shape)
         # loss = F.nll_loss(

@@ -74,13 +74,13 @@ class BiEncoderTrainer(object):
         model_file = get_model_file(cfg, cfg.checkpoint_file_name)
         saved_state = None
         if model_file:
+            print("Loading model state from checkpoint:", model_file)
             saved_state = load_states_from_checkpoint(model_file)
             set_cfg_params_from_state(saved_state.encoder_params, cfg)
 
         tensorizer, model, optimizer = init_biencoder_components(cfg.encoder.encoder_model_type, cfg)
-        # model.coordinate_ascent_status = CoordinateAscentStatus.TRAIN_Q
-        model.coordinate_ascent_status = CoordinateAscentStatus.TRAIN_CTX
-        print("set coordinate ascent status to 2 (will switch to 1 before first epoch)")
+        model.coordinate_ascent_status = CoordinateAscentStatus.TRAIN_Q
+        # model.coordinate_ascent_status = CoordinateAscentStatus.TRAIN_CTX
 
         model, optimizer = setup_for_distributed_mode(
             model,
@@ -91,6 +91,7 @@ class BiEncoderTrainer(object):
             cfg.fp16,
             cfg.fp16_opt_level,
         )
+        wandb.watch(model)
         self.biencoder = model
         self.optimizer = optimizer
         self.tensorizer = tensorizer
@@ -103,6 +104,7 @@ class BiEncoderTrainer(object):
         self.ds_cfg = BiencoderDatasetsCfg(cfg)
 
         if saved_state:
+            print("*** Loading model saved state")
             self._load_saved_state(saved_state)
 
         self.dev_iterator = None
@@ -233,12 +235,10 @@ class BiEncoderTrainer(object):
         if not cfg.dev_datasets:
             validation_loss = 0
         else:
-            # if epoch >= cfg.val_av_rank_start_epoch:
-            # else:
-            avg_rank_start_epoch = 3
-            if epoch >= avg_rank_start_epoch:
+            if epoch >= cfg.val_av_rank_start_epoch:
                 validation_loss = self.validate_average_rank()
                 wandb.log({ "val_average_rank": validation_loss, "epoch": epoch, "step": iteration })
+            # Always run validate_nll().
             validation_loss, val_nll_ratio = self.validate_nll()
             wandb.log({ "val_nll": validation_loss, "val_nll_ratio": val_nll_ratio, "epoch": epoch, "step": iteration })
 
@@ -271,6 +271,9 @@ class BiEncoderTrainer(object):
         batches = 0
         dataset = 0
         biencoder = get_model_obj(self.biencoder)
+        biencoder.use_min_criteria_for_toggle = cfg.train.use_min_criteria_for_toggle
+
+        print(f"set biencoder.use_min_criteria_for_toggle = {biencoder.use_min_criteria_for_toggle}")
 
         print(f"validate_nll num_hard_negatives = {num_hard_negatives} / num_other_negatives = {num_other_negatives}")
 
@@ -785,8 +788,22 @@ def main(cfg: DictConfig):
             )
         )
     
+
+    def _get_data_prefix() -> str:
+        if cfg['train_datasets'] is None:
+            return ''
+        elif isinstance(cfg['train_datasets'], list):
+            assert len(cfg['train_datasets']) == 1
+            name = cfg['train_datasets'][0]
+        else:
+            name = cfg['train_datasets']
+        assert isinstance(name, str)
+        return name.replace('curatedtrec', 'trec').replace('_train', '') # 'webq_train' -> 'webq'
+
+    # import pdb; pdb.set_trace()
+    wandb_run_name = f'{_get_data_prefix()}_biencoder_ca_{cfg.train.precomputed_hard_negatives}hn'
     wandb.init(
-        name=f'biencoder_ca_{cfg.train.precomputed_hard_negatives}hn',
+        name=wandb_run_name,
         project='dpr-ca-2',
         entity='jack-morris',
         config=dict(cfg.train),

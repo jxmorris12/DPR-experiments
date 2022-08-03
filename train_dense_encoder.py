@@ -74,8 +74,10 @@ class BiEncoderTrainer(object):
         model_file = get_model_file(cfg, cfg.checkpoint_file_name)
         saved_state = None
         if model_file:
+            print("Loading model state from checkpoint:", model_file)
             saved_state = load_states_from_checkpoint(model_file)
             set_cfg_params_from_state(saved_state.encoder_params, cfg)
+            import pdb; pdb.set_trace()
 
         tensorizer, model, optimizer = init_biencoder_components(cfg.encoder.encoder_model_type, cfg)
 
@@ -100,6 +102,7 @@ class BiEncoderTrainer(object):
         self.ds_cfg = BiencoderDatasetsCfg(cfg)
 
         if saved_state:
+            print("*** Loading model saved state")
             self._load_saved_state(saved_state)
 
         self.dev_iterator = None
@@ -319,8 +322,8 @@ class BiEncoderTrainer(object):
 
         sub_batch_size = cfg.train.val_av_rank_bsz
         sim_score_f = BiEncoderNllLoss.get_similarity_function()
-        q_represenations = []
-        ctx_represenations = []
+        q_representations = []
+        ctx_representations = []
         positive_idx_per_question = []
 
         num_hard_negatives = cfg.train.val_av_rank_hard_neg
@@ -331,7 +334,7 @@ class BiEncoderTrainer(object):
         biencoder = get_model_obj(self.biencoder)
         for i, samples_batch in enumerate(data_iterator.iterate_ds_data()):
             # samples += 1
-            if len(q_represenations) > cfg.train.val_av_rank_max_qs / distributed_factor:
+            if len(q_representations) > cfg.train.val_av_rank_max_qs / distributed_factor:
                 break
 
             if isinstance(samples_batch, Tuple):
@@ -349,7 +352,7 @@ class BiEncoderTrainer(object):
             biencoder_input = BiEncoderBatch(
                 **move_to_device(biencoder_input._asdict(), cfg.device)
             )
-            total_ctxs = len(ctx_represenations)
+            total_ctxs = len(ctx_representations)
             ctxs_ids = biencoder_input.context_ids
             ctxs_segments = biencoder_input.ctx_segments
             bsz = ctxs_ids.size(0)
@@ -389,9 +392,9 @@ class BiEncoderTrainer(object):
                     )
 
                 if q_dense is not None:
-                    q_represenations.extend(q_dense.cpu().split(1, dim=0))
+                    q_representations.extend(q_dense.cpu().split(1, dim=0))
 
-                ctx_represenations.extend(ctx_dense.cpu().split(1, dim=0))
+                ctx_representations.extend(ctx_dense.cpu().split(1, dim=0))
 
             batch_positive_idxs = biencoder_input.is_positive
             positive_idx_per_question.extend([total_ctxs + v for v in batch_positive_idxs])
@@ -400,20 +403,20 @@ class BiEncoderTrainer(object):
                 logger.info(
                     "Av.rank validation: step %d, computed ctx_vectors %d, q_vectors %d",
                     i,
-                    len(ctx_represenations),
-                    len(q_represenations),
+                    len(ctx_representations),
+                    len(q_representations),
                 )
 
-        ctx_represenations = torch.cat(ctx_represenations, dim=0)
-        q_represenations = torch.cat(q_represenations, dim=0)
+        ctx_representations = torch.cat(ctx_representations, dim=0)
+        q_representations = torch.cat(q_representations, dim=0)
 
-        logger.info("Av.rank validation: total q_vectors size=%s", q_represenations.size())
-        logger.info("Av.rank validation: total ctx_vectors size=%s", ctx_represenations.size())
+        logger.info("Av.rank validation: total q_vectors size=%s", q_representations.size())
+        logger.info("Av.rank validation: total ctx_vectors size=%s", ctx_representations.size())
 
-        q_num = q_represenations.size(0)
+        q_num = q_representations.size(0)
         assert q_num == len(positive_idx_per_question)
 
-        scores = sim_score_f(q_represenations, ctx_represenations)
+        scores = sim_score_f(q_representations, ctx_representations)
         values, indices = torch.sort(scores, dim=1, descending=True)
 
         rank = 0
