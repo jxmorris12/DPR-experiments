@@ -2,6 +2,9 @@
 
 # batch_size: 32
 batch_size: 16
+# TODO: In the approximate softmax setting (use_full_softmax=False) and option for including another
+# N randomly chosen precmoputed negatives as in-batch negatives.
+
 # batch_size: 8
 dev_batch_size: 64
 adam_eps: 1e-8
@@ -15,8 +18,8 @@ learning_rate: 1e-5
 
 # Linear warmup over warmup_steps.
 # warmup_steps: 2474 # bs 8
-# warmup_steps: 1237 # bs 16
-warmup_steps: 618 # bs 32
+warmup_steps: 1237 # bs 16
+# warmup_steps: 618 # bs 32
 # warmup_steps: 309 # bs 64
 
 
@@ -24,10 +27,19 @@ warmup_steps: 618 # bs 32
 # or simply alternate (False).
 use_min_criteria_for_toggle: False
 
+# When true, does softmax over all queries/contexts in the memory bank to compute
+# CA loss. Otherwise, just uses the ones in the batch – this version is akin to a
+# contrastive loss with precomputed negative embeddings.
+use_full_softmax: False
+
 # Number of updates steps to accumulate before performing a backward/update pass.
 gradient_accumulation_steps: 1
 
-shuffle_positives_override: True
+# Whether to shuffle positive samples during training, or just take the first one
+# every time.
+# (Update 8/5: This seems to be a bad idea for most datasets...)
+shuffle_positives_override: False
+
 # Total number of training epochs to perform.
 num_train_epochs: 100
 eval_per_epoch: 1

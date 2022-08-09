@@ -121,7 +121,7 @@ class BiEncoder(nn.Module):
         # index of stored negative passages corresponding to each stored positive passage.
         self._stored_negative_passage_idxs_by_query_idx = None # will be overriden each time we get positive passage
     
-    def _get_positive_passage_idxs(self, train_iterator: MultiSetDataIterator) -> Set[int]:
+    def _get_positive_passage_idxs(self, train_iterator: MultiSetDataIterator, shuffle_positives: bool) -> Set[int]:
         """
         'What body of water does the Colorado River flow into?' and 
         'What body of water does the Colorado River empty into?'
@@ -130,7 +130,6 @@ class BiEncoder(nn.Module):
         """
         if not len(self._ctx_idx_to_query_idx):
             print("Getting indices of all positive passages...(we only do this once)...")
-            self._positive_passage_idxs = set()
             data = train_iterator.iterate_ds_data(epoch=0)
             i = 0
             idx_to_sample = {}
@@ -138,7 +137,12 @@ class BiEncoder(nn.Module):
             for batch, _dataset_idx in data:
                 for sample in batch:
                     idx_to_sample[sample.query_idx] = sample
-                    for positive_passage in sample.positive_passages:
+                    if shuffle_positives:
+                        positive_passages = sample.positive_passages
+                    else:
+                        positive_passages = [sample.positive_passages[0]]
+                    
+                    for positive_passage in positive_passages:
                         positive_ctx_idx_to_query_idxs[positive_passage.index].add(i)
                         self._ctx_idx_to_query_idx[positive_passage.index].add(sample.query_idx)
                         self._query_idx_to_ctx_idx[sample.query_idx].add(positive_passage.index)
@@ -194,7 +198,7 @@ class BiEncoder(nn.Module):
         negative_passage_idxs = []
         already_seen_idxs = set()
         all_positive_passage_idxs = self._get_positive_passage_idxs(
-            train_iterator=train_iterator
+            train_iterator=train_iterator, shuffle_positives=cfg.train.shuffle_positives_override
         )
 
         print("TODO: consider using 'regular' negatives as well in training.")
@@ -209,7 +213,7 @@ class BiEncoder(nn.Module):
         for i, samples_batch in tqdm.tqdm(
             enumerate(data),
             colour="red", leave=False,
-            desc="Precomputing embeddings",
+            desc=f"Precomputing embeddings with hn={num_hard_negatives}",
             total=train_iterator.get_max_iterations()
         ):
 
@@ -339,18 +343,15 @@ class BiEncoder(nn.Module):
             # Ensure no negative contexts that have IDs that appear in positive contexts.
             positive_passage_idxs = torch.tensor(positive_passage_idxs)
             if len(negative_passage_idxs) > 0:
-                # no negative examples.
-                all_ctxs = torch.cat(pos_ctxs, dim=0)
-            else:
                 negative_passage_idxs = torch.tensor(negative_passage_idxs)
                 negative_ctxs_duplicate_mask = (
                     negative_passage_idxs[:, None] == positive_passage_idxs[None, :]
                 ).any(dim=1)
                 assert negative_ctxs_duplicate_mask.sum() == 0, "found negative contexts that were already positive contexts"
                 
-                all_ctxs = torch.cat((pos_ctxs + neg_ctxs), dim=0)
-                # Store indices for positive contexts. This lets us figure out
-                # *all* the queries that correspond to it later.
+            all_ctxs = torch.cat((pos_ctxs + neg_ctxs), dim=0)
+            # Store indices for positive contexts. This lets us figure out
+            # *all* the queries that correspond to it later.
             self._pos_ctx_idxs = positive_passage_idxs
             self._query_idxs = None
 
@@ -677,8 +678,9 @@ class BiEncoder(nn.Module):
 
 class BiEncoderNllLoss(object):
     biencoder: Optional[BiEncoder]
-    def __init__(self, biencoder: Optional[BiEncoder] = None):
+    def __init__(self, biencoder: Optional[BiEncoder] = None, use_full_softmax: bool = False):
         self.biencoder = biencoder
+        self.use_full_softmax = use_full_softmax
     
     def _get_true_mask_for_query(self, query_absolute_idxs) -> T:
         assert self.biencoder._pos_ctx_idxs is not None
@@ -770,22 +772,42 @@ class BiEncoderNllLoss(object):
         """
 
         assert stored_vectors is not None, f"got None stored_vectors with coordinate_ascent_status {self.biencoder.coordinate_ascent_status}"
-        USE_FULL_SOFTMAX = False
 
-        if not USE_FULL_SOFTMAX:
+        if not self.use_full_softmax:
+            # 
+            # When USE_FULL_SOFTMAX is false, we only compute loss for positive
+            # + negative samples *in the batch*.
+            # 
+
             # Get indices of all negative samples so we can include them in the loss too
             neg_idxs = []
             for idx in absolute_idxs.cpu().tolist():
                 neg_idxs.extend(self.biencoder._stored_negative_passage_idxs_by_query_idx[idx])
             if len(neg_idxs) > 0:
                 neg_idxs = torch.tensor(neg_idxs) + self.biencoder._num_positive_samples
-                all_sample_idxs = torch.cat((absolute_idxs, neg_idxs), dim=0)
+                all_sample_idxs = torch.cat((absolute_idxs, neg_idxs.to(absolute_idxs.device)), dim=0)
             else:
                 all_sample_idxs = absolute_idxs
-            import pdb; pdb.set_trace()
-            stored_vectors = stored_vectors[all_sample_idxs]
-            true_idx_mask = true_idx_mask[absolute_idxs]
+            true_idx_mask = true_idx_mask[:, absolute_idxs]
+        
+        else:
+            # When use_full_softmax is true, we still only use negative samples from within the batch.
+            neg_idxs = []
+            for idx in absolute_idxs.cpu().tolist():
+                neg_idxs.extend(self.biencoder._stored_negative_passage_idxs_by_query_idx[idx])
+            if len(neg_idxs) > 0:
+                neg_idxs = torch.tensor(neg_idxs) + self.biencoder._num_positive_samples
+                all_sample_idxs = torch.cat(
+                    (torch.arange(self.biencoder._num_positive_samples), neg_idxs), dim=0
+                ).to(absolute_idxs.device)
+            else:
+                all_sample_idxs = torch.arange(self.biencoder._num_positive_samples).to(absolute_idxs.device)
+            # import pdb; pdb.set_trace()
 
+        # import pdb; pdb.set_trace()
+        stored_vectors = stored_vectors[all_sample_idxs]
+        # print('indexing the thingy. true_idx_mask.shape:', true_idx_mask.shape, 'absolute_idxs.shape:', absolute_idxs.shape)
+        # print('absolute_idxs:', absolute_idxs.cpu().tolist())
         
         sims = self.get_scores(batch_vectors, stored_vectors)
         # softmax_scores = sims.log_softmax(dim=1)
@@ -818,9 +840,16 @@ class BiEncoderNllLoss(object):
 
         # todo: how to compute this w/ multiple correct idxs?
         _max_score, max_idxs = torch.max(sims, 1)
-        correct_predictions_count = (
-            max_idxs == absolute_idxs.to(max_idxs.device)
-        ).sum()
+
+        if self.use_full_softmax:
+            correct_predictions_count = (
+                max_idxs == absolute_idxs.to(max_idxs.device)
+            ).sum()
+        else:
+            correct_predictions_count = (
+                max_idxs == torch.arange(batch_size).to(max_idxs.device)
+            ).sum()
+
         return loss, correct_predictions_count
 
     

@@ -753,6 +753,7 @@ def _do_biencoder_fwd_pass(
 
     loss_function = BiEncoderNllLoss(
         biencoder=model,
+        use_full_softmax=cfg.train.use_full_softmax
     )
 
     loss, is_correct = _calc_loss(
