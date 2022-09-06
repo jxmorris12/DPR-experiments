@@ -332,14 +332,12 @@ class BiEncoderTrainer(object):
         log_result_step = cfg.train.log_batch_step
         dataset = 0
         biencoder = get_model_obj(self.biencoder)
+
+        print('updating biencoder IDF')
+
+        biencoder_inputs = []
+        biencoder.reset_idf()
         for i, samples_batch in enumerate(data_iterator.iterate_ds_data()):
-            # samples += 1
-            if len(q_representations) > cfg.train.val_av_rank_max_qs / distributed_factor:
-                break
-
-            if isinstance(samples_batch, Tuple):
-                samples_batch, dataset = samples_batch
-
             biencoder_input = biencoder.create_biencoder_input(
                 samples_batch,
                 self.tensorizer,
@@ -348,9 +346,20 @@ class BiEncoderTrainer(object):
                 num_other_negatives,
                 shuffle=False,
             )
+            biencoder.process_batch_idf(batch_input=biencoder_input)
+            biencoder_inputs.append(biencoder_input)
+
+        for i, samples_batch in enumerate(data_iterator.iterate_ds_data()):
+            # samples += 1
+            if len(q_representations) > cfg.train.val_av_rank_max_qs / distributed_factor:
+                break
+
+            if isinstance(samples_batch, Tuple):
+                samples_batch, dataset = samples_batch
+
             # fix https://github.com/facebookresearch/DPR/issues/173
             biencoder_input = BiEncoderBatch(
-                **move_to_device(biencoder_input._asdict(), cfg.device)
+                **move_to_device(biencoder_inputs[i]._asdict(), cfg.device)
             )
             total_ctxs = len(ctx_representations)
             ctxs_ids = biencoder_input.context_ids
@@ -476,6 +485,8 @@ class BiEncoderTrainer(object):
             data_iteration = train_data_iterator.get_iteration()
             random.seed(seed + epoch + data_iteration)
 
+
+            biencoder.reset_idf()
             biencoder_batch = biencoder.create_biencoder_input(
                 samples_batch,
                 self.tensorizer,
@@ -486,6 +497,7 @@ class BiEncoderTrainer(object):
                 shuffle_positives=shuffle_positives,
                 query_token=special_token,
             )
+            biencoder.process_batch_idf(batch_input=biencoder_input)
 
             # get the token to be used for representation selection
             from dpr.utils.data_utils import DEFAULT_SELECTOR

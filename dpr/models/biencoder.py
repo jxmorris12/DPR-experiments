@@ -120,6 +120,20 @@ class BiEncoder(nn.Module):
 
         # index of stored negative passages corresponding to each stored positive passage.
         self._stored_negative_passage_idxs_by_query_idx = None # will be overriden each time we get positive passage
+
+
+        ############################ IDF Statistics ##############################
+        __bert_vocab_size = 30522
+        self.reset_idf()
+    
+    def process_batch_idf(self, batch_input) -> None:
+        breakpoint()
+
+        
+    def reset_idf(self) -> None:
+        self._IDF_N = 0
+        self._IDF_f = torch.zeros((__bert_vocab_size,), dtype = int) 
+    
     
     def _get_positive_passage_idxs(self, train_iterator: MultiSetDataIterator, shuffle_positives: bool) -> Set[int]:
         """
@@ -757,7 +771,7 @@ class BiEncoderNllLoss(object):
 
         return loss, correct_predictions_count
     
-    def _calc_ca_loss(
+    def _calc_ca_loss_train_query(
             self,
             batch_vectors: T,
             stored_vectors: T,
@@ -765,10 +779,8 @@ class BiEncoderNllLoss(object):
             absolute_idxs: T,
             loss_scale: float = None
         ) -> Tuple[T, int]:
-        """Computes full softmax over all `stored_vectors`.
-
-        Also tries to take into account false positives, where a context passage
-        actually corresponds to more than one query.
+        """Computes full softmax over all `stored_vectors`. When training the query encoder,
+        we can use all of the precomputed samples as negative passages.
         """
 
         assert stored_vectors is not None, f"got None stored_vectors with coordinate_ascent_status {self.biencoder.coordinate_ascent_status}"
@@ -789,23 +801,29 @@ class BiEncoderNllLoss(object):
             else:
                 all_sample_idxs = absolute_idxs
             true_idx_mask = true_idx_mask[:, absolute_idxs]
+            
+            # stored_vectors = stored_vectors[all_sample_idxs]
         
         else:
+            pass
+            ########################################################################
+            ########  Following lines samples from only within the batch   #########
+            ########################################################################
             # When use_full_softmax is true, we still only use negative samples from within the batch.
-            neg_idxs = []
-            for idx in absolute_idxs.cpu().tolist():
-                neg_idxs.extend(self.biencoder._stored_negative_passage_idxs_by_query_idx[idx])
-            if len(neg_idxs) > 0:
-                neg_idxs = torch.tensor(neg_idxs) + self.biencoder._num_positive_samples
-                all_sample_idxs = torch.cat(
-                    (torch.arange(self.biencoder._num_positive_samples), neg_idxs), dim=0
-                ).to(absolute_idxs.device)
-            else:
-                all_sample_idxs = torch.arange(self.biencoder._num_positive_samples).to(absolute_idxs.device)
+            # neg_idxs = []
+            # for idx in absolute_idxs.cpu().tolist():
+            #     neg_idxs.extend(self.biencoder._stored_negative_passage_idxs_by_query_idx[idx])
+            # if len(neg_idxs) > 0:
+            #     neg_idxs = torch.tensor(neg_idxs) + self.biencoder._num_positive_samples
+            #     all_sample_idxs = torch.cat(
+            #         (torch.arange(self.biencoder._num_positive_samples), neg_idxs), dim=0
+            #     ).to(absolute_idxs.device)
+            # else:
+            #     all_sample_idxs = torch.arange(self.biencoder._num_positive_samples).to(absolute_idxs.device)
             # import pdb; pdb.set_trace()
+            # stored_vectors = stored_vectors[all_sample_idxs]
 
         # import pdb; pdb.set_trace()
-        stored_vectors = stored_vectors[all_sample_idxs]
         # print('indexing the thingy. true_idx_mask.shape:', true_idx_mask.shape, 'absolute_idxs.shape:', absolute_idxs.shape)
         # print('absolute_idxs:', absolute_idxs.cpu().tolist())
         
