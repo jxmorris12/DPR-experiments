@@ -121,19 +121,35 @@ class BiEncoder(nn.Module):
         # index of stored negative passages corresponding to each stored positive passage.
         self._stored_negative_passage_idxs_by_query_idx = None # will be overriden each time we get positive passage
 
-
         ############################ IDF Statistics ##############################
-        __bert_vocab_size = 30522
+        self.use_idf_encoder = True
+
+        self._embedding_dim = 768
+        self._vocab_size = 30522
+
+        self.idf_sparse_embed = nn.Sequential(
+            nn.Linear(self._vocab_size, self._embedding_dim),
+            nn.ReLU(),
+        )
+        self.joint_idf_embed = nn.Sequential(
+            nn.Linear(self._embedding_dim * 2, self._embedding_dim),
+            nn.ReLU(),
+            nn.Linear(self._embedding_dim, self._embedding_dim)
+        )
         self.reset_idf()
     
-    def process_batch_idf(self, batch_input) -> None:
-        breakpoint()
+    def process_batch_idf(self, batch: BiEncoderBatch) -> None:
+        input_ids = batch.context_ids.flatten()
+        all_vocab_ids = torch.arange(start=0, end=self._vocab_size, dtype=int).to(input_ids.device)
+        with torch.no_grad():
+            batch_idf = (input_ids[:, None] == all_vocab_ids[None, :]).sum(dim=0)
 
+        self._IDF_corpus_size += len(input_ids)
+        self._IDF_frequencies += batch_idf
         
     def reset_idf(self) -> None:
-        self._IDF_N = 0
-        self._IDF_f = torch.zeros((__bert_vocab_size,), dtype = int) 
-    
+        self._IDF_corpus_size = 0
+        self._IDF_frequencies = torch.zeros((self._vocab_size,), dtype=int, requires_grad=False) 
     
     def _get_positive_passage_idxs(self, train_iterator: MultiSetDataIterator, shuffle_positives: bool) -> Set[int]:
         """
@@ -468,11 +484,32 @@ class BiEncoder(nn.Module):
             self.coordinate_ascent_status = CoordinateAscentStatus.TRAIN_Q
         else:
             #    coordinate ascent disabled - do nothing
-            pass
-        
+            pass        
+    
+    @property
+    def _idf(self) -> torch.Tensor:
+        assert (self._IDF_corpus_size > 0), "can't compute IDF without any documents!"
+        return torch.log(self._IDF_corpus_size - self._IDF_frequencies + 0.5) - torch.log(self._IDF_frequencies + 0.5)
+    
+    def idf_embed(self, token_embeddings: torch.Tensor) -> torch.Tensor:
+        """Augments word embeddings with IDF information."""
+        batch_size, sequence_length, _ = token_embeddings.shape
+        idf_vector = self._idf[None].to(token_embeddings.device)
+        idf_embedding = self.idf_sparse_embed(idf_vector)
+        assert idf_embedding.shape == (1, 768)
+        idf_embedding = idf_embedding[None].repeat((batch_size, sequence_length, 1))
+        ################################################################################
+        idf_embedding = idf_embedding.reshape((batch_size * sequence_length, self._embedding_dim))
+        token_embeddings = idf_embedding.reshape((batch_size * sequence_length, self._embedding_dim))
+        joint_embedding = torch.cat((idf_embedding, token_embeddings), dim=1)
+        assert joint_embedding.shape == (batch_size * sequence_length, self._embedding_dim * 2)
+        ################################################################################
+        out_embedding = self.joint_idf_embed(joint_embedding)
+        assert out_embedding.shape == (batch_size * sequence_length, self._embedding_dim)
+        return out_embedding.reshape((batch_size, sequence_length, self._embedding_dim))
 
-    @staticmethod
     def get_representation(
+        self,
         sub_model: nn.Module,
         ids: T,
         segments: T,
@@ -487,9 +524,9 @@ class BiEncoder(nn.Module):
             if fix_encoder:
                 with torch.no_grad():
                     sequence_output, pooled_output, hidden_states = sub_model(
-                        ids,
-                        segments,
-                        attn_mask,
+                        input_ids=ids,
+                        token_type_ids=segments,
+                        attention_mask=attn_mask,
                         representation_token_pos=representation_token_pos,
                     )
 
@@ -498,11 +535,34 @@ class BiEncoder(nn.Module):
                     pooled_output.requires_grad_(requires_grad=True)
             else:
                 sequence_output, pooled_output, hidden_states = sub_model(
-                    ids,
-                    segments,
-                    attn_mask,
+                    input_ids=ids,
+                    token_type_ids=segments,
+                    attention_mask=attn_mask,
                     representation_token_pos=representation_token_pos,
                 )
+
+        return sequence_output, pooled_output, hidden_states
+
+    def get_representation_ctx(
+        self,
+        sub_model: nn.Module,
+        ids: T,
+        segments: T,
+        attn_mask: T,
+        fix_encoder: bool = False,
+        representation_token_pos=0,
+    ) -> (T, T, T):
+        """Gets context representation and optionally adds IDF."""
+        token_embeddings = sub_model.embeddings.word_embeddings.forward(ids)
+        if self.use_idf_encoder:
+            token_embeddings += self.idf_embed(token_embeddings)
+
+        sequence_output, pooled_output, hidden_states = sub_model(
+            attention_mask=attn_mask,
+            token_type_ids=segments,
+            representation_token_pos=representation_token_pos,
+            inputs_embeds=token_embeddings,
+        )
 
         return sequence_output, pooled_output, hidden_states
 
@@ -538,7 +598,7 @@ class BiEncoder(nn.Module):
             ctx_pooled_out = None
         else:
             ctx_encoder = self.ctx_model if encoder_type is None or encoder_type == "ctx" else self.question_model
-            _ctx_seq, ctx_pooled_out, _ctx_hidden = self.get_representation(
+            _ctx_seq, ctx_pooled_out, _ctx_hidden = self.get_representation_ctx(
                 ctx_encoder, context_ids, ctx_segments, ctx_attn_mask, self.fix_ctx_encoder
             )
 

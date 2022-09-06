@@ -187,6 +187,8 @@ class BiEncoderTrainer(object):
             )
         else:
             scheduler = get_schedule_linear(self.optimizer, warmup_steps, total_updates)
+        
+        self.biencoder.use_idf_encoder = cfg.train.use_idf_encoder
 
         eval_step = math.ceil(updates_per_epoch / cfg.train.eval_per_epoch)
         logger.info("  Eval step = %d", eval_step)
@@ -247,12 +249,12 @@ class BiEncoderTrainer(object):
         batches = 0
         dataset = 0
         biencoder = get_model_obj(self.biencoder)
+        biencoder_inputs = []
+        biencoder.reset_idf()
 
         for i, samples_batch in enumerate(data_iterator.iterate_ds_data()):
             if isinstance(samples_batch, Tuple):
                 samples_batch, dataset = samples_batch
-            logger.info("Eval step: %d ,rnk=%s", i, cfg.local_rank)
-
             biencoder_input = biencoder.create_biencoder_input(
                 samples_batch,
                 self.tensorizer,
@@ -261,6 +263,15 @@ class BiEncoderTrainer(object):
                 num_other_negatives,
                 shuffle=False,
             )
+            biencoder.process_batch_idf(batch=biencoder_input)
+            biencoder_inputs.append(biencoder_input)
+
+        for i, samples_batch in enumerate(data_iterator.iterate_ds_data()):
+            if isinstance(samples_batch, Tuple):
+                samples_batch, dataset = samples_batch
+            logger.info("Eval step: %d ,rnk=%s", i, cfg.local_rank)
+
+            biencoder_input = biencoder_inputs[i]
 
             # get the token to be used for representation selection
             ds_cfg = self.ds_cfg.dev_datasets[dataset]
@@ -338,6 +349,8 @@ class BiEncoderTrainer(object):
         biencoder_inputs = []
         biencoder.reset_idf()
         for i, samples_batch in enumerate(data_iterator.iterate_ds_data()):
+            if isinstance(samples_batch, Tuple):
+                samples_batch, dataset = samples_batch
             biencoder_input = biencoder.create_biencoder_input(
                 samples_batch,
                 self.tensorizer,
@@ -346,7 +359,7 @@ class BiEncoderTrainer(object):
                 num_other_negatives,
                 shuffle=False,
             )
-            biencoder.process_batch_idf(batch_input=biencoder_input)
+            biencoder.process_batch_idf(batch=biencoder_input)
             biencoder_inputs.append(biencoder_input)
 
         for i, samples_batch in enumerate(data_iterator.iterate_ds_data()):
@@ -497,7 +510,7 @@ class BiEncoderTrainer(object):
                 shuffle_positives=shuffle_positives,
                 query_token=special_token,
             )
-            biencoder.process_batch_idf(batch_input=biencoder_input)
+            biencoder.process_batch_idf(batch=biencoder_batch)
 
             # get the token to be used for representation selection
             from dpr.utils.data_utils import DEFAULT_SELECTOR
@@ -781,8 +794,8 @@ def main(cfg: DictConfig):
         )
 
     wandb.init(
-        name='biencoder_contrastive',
-        project='dpr-ca-2',
+        name='biencoder_contrastive' + ('_idf' if cfg.train.use_idf_encoder else ''),
+        project='dpr-idf',
         entity='jack-morris',
         config=dict(cfg.train),
     )

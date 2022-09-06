@@ -10,7 +10,7 @@ Encoder model wrappers based on HuggingFace code
 """
 
 import logging
-from typing import Tuple, List
+from typing import Optional, Tuple, List
 
 import torch
 import transformers
@@ -220,17 +220,26 @@ class HFBertEncoder(BertModel):
 
     def forward(
         self,
-        input_ids: T,
-        token_type_ids: T,
-        attention_mask: T,
+        input_ids: T = None,
+        token_type_ids: T = None,
+        attention_mask: T = None,
+        inputs_embeds: Optional[T] = None,
         representation_token_pos=0,
     ) -> Tuple[T, ...]:
 
-        out = super().forward(
-            input_ids=input_ids,
-            token_type_ids=token_type_ids,
-            attention_mask=attention_mask,
-        )
+
+        if (inputs_embeds is not None):
+            out = super().forward(
+                token_type_ids=token_type_ids,
+                attention_mask=attention_mask,
+                inputs_embeds=inputs_embeds,
+            )
+        else:
+            out = super().forward(
+                input_ids=input_ids,
+                token_type_ids=token_type_ids,
+                attention_mask=attention_mask,
+            )
 
         # HF >4.0 version support
         if transformers.__version__.startswith("4") and isinstance(
