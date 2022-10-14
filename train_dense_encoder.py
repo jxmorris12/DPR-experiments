@@ -20,6 +20,7 @@ from typing import Tuple
 
 import hydra
 import torch
+import tqdm
 from omegaconf import DictConfig, OmegaConf
 from torch import Tensor as T
 from torch import nn
@@ -212,9 +213,7 @@ class BiEncoderTrainer(object):
         if not cfg.dev_datasets:
             validation_loss = 0
         else:
-            # if epoch >= cfg.val_av_rank_start_epoch:
-            # else:
-            if epoch >= 6:
+            if epoch >= cfg.val_av_rank_start_epoch:
                 validation_loss = self.validate_average_rank()
                 wandb.log({ "val_average_rank": validation_loss, "epoch": epoch, "step": iteration })
             validation_loss, val_nll_ratio = self.validate_nll()
@@ -249,12 +248,12 @@ class BiEncoderTrainer(object):
         batches = 0
         dataset = 0
         biencoder = get_model_obj(self.biencoder)
-        biencoder_inputs = []
-        biencoder.reset_idf()
 
         for i, samples_batch in enumerate(data_iterator.iterate_ds_data()):
             if isinstance(samples_batch, Tuple):
                 samples_batch, dataset = samples_batch
+            logger.info("Eval step: %d ,rnk=%s", i, cfg.local_rank)
+
             biencoder_input = biencoder.create_biencoder_input(
                 samples_batch,
                 self.tensorizer,
@@ -263,20 +262,14 @@ class BiEncoderTrainer(object):
                 num_other_negatives,
                 shuffle=False,
             )
-            biencoder.process_batch_idf(batch=biencoder_input)
-            biencoder_inputs.append(biencoder_input)
-
-        for i, samples_batch in enumerate(data_iterator.iterate_ds_data()):
-            if isinstance(samples_batch, Tuple):
-                samples_batch, dataset = samples_batch
-            logger.info("Eval step: %d ,rnk=%s", i, cfg.local_rank)
-
-            biencoder_input = biencoder_inputs[i]
 
             # get the token to be used for representation selection
             ds_cfg = self.ds_cfg.dev_datasets[dataset]
             rep_positions = ds_cfg.selector.get_positions(biencoder_input.question_ids, self.tensorizer)
             encoder_type = ds_cfg.encoder_type
+
+            biencoder.reset_idf()
+            biencoder.process_batch_idf(batch=biencoder_input)
 
             loss, correct_cnt = _do_biencoder_fwd_pass(
                 self.biencoder,
@@ -344,9 +337,8 @@ class BiEncoderTrainer(object):
         dataset = 0
         biencoder = get_model_obj(self.biencoder)
 
-        print('updating biencoder IDF')
+        logger.info('[1/2] updating biencoder IDF...')
 
-        biencoder_inputs = []
         biencoder.reset_idf()
         for i, samples_batch in enumerate(data_iterator.iterate_ds_data()):
             if isinstance(samples_batch, Tuple):
@@ -360,8 +352,8 @@ class BiEncoderTrainer(object):
                 shuffle=False,
             )
             biencoder.process_batch_idf(batch=biencoder_input)
-            biencoder_inputs.append(biencoder_input)
-
+        
+        logger.info('[2/2] done updating biencoder IDF; validating...')
         for i, samples_batch in enumerate(data_iterator.iterate_ds_data()):
             # samples += 1
             if len(q_representations) > cfg.train.val_av_rank_max_qs / distributed_factor:
@@ -370,9 +362,18 @@ class BiEncoderTrainer(object):
             if isinstance(samples_batch, Tuple):
                 samples_batch, dataset = samples_batch
 
+            biencoder_input = biencoder.create_biencoder_input(
+                samples_batch,
+                self.tensorizer,
+                True,
+                num_hard_negatives,
+                num_other_negatives,
+                shuffle=False,
+            )
+
             # fix https://github.com/facebookresearch/DPR/issues/173
             biencoder_input = BiEncoderBatch(
-                **move_to_device(biencoder_inputs[i]._asdict(), cfg.device)
+                **move_to_device(biencoder_input._asdict(), cfg.device)
             )
             total_ctxs = len(ctx_representations)
             ctxs_ids = biencoder_input.context_ids
@@ -592,6 +593,7 @@ class BiEncoderTrainer(object):
 
         wandb.log({ "train_loss_epoch": epoch_loss, "epoch": epoch, "step": train_data_iterator.get_iteration() })
         wandb.log({ "train_num_correct": epoch_correct_predictions, "epoch": epoch, "step": train_data_iterator.get_iteration() })
+        wandb.log({ "train_pct_correct": (epoch_correct_predictions / (cfg.train.batch_size * epoch_batches)), "epoch": epoch, "step": train_data_iterator.get_iteration() })
 
     def _save_checkpoint(self, scheduler, epoch: int, offset: int) -> str:
         cfg = self.cfg
@@ -786,6 +788,7 @@ def _do_biencoder_fwd_pass(
 
 @hydra.main(config_path="conf", config_name="biencoder_train_cfg")
 def main(cfg: DictConfig):
+    assert torch.cuda.is_available(), "need CUDA for training"
     if cfg.train.gradient_accumulation_steps < 1:
         raise ValueError(
             "Invalid gradient_accumulation_steps parameter: {}, should be >= 1".format(

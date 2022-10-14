@@ -127,8 +127,11 @@ class BiEncoder(nn.Module):
         self._embedding_dim = 768
         self._vocab_size = 30522
 
+        bottleneck_embedding_dim = 128
         self.idf_sparse_embed = nn.Sequential(
-            nn.Linear(self._vocab_size, self._embedding_dim),
+            nn.Linear(self._vocab_size, bottleneck_embedding_dim),
+            nn.ReLU(),
+            nn.Linear(bottleneck_embedding_dim, self._embedding_dim),
             nn.ReLU(),
         )
         self.joint_idf_embed = nn.Sequential(
@@ -140,12 +143,8 @@ class BiEncoder(nn.Module):
     
     def process_batch_idf(self, batch: BiEncoderBatch) -> None:
         input_ids = batch.context_ids.flatten()
-        all_vocab_ids = torch.arange(start=0, end=self._vocab_size, dtype=int).to(input_ids.device)
-        with torch.no_grad():
-            batch_idf = (input_ids[:, None] == all_vocab_ids[None, :]).sum(dim=0)
-
         self._IDF_corpus_size += len(input_ids)
-        self._IDF_frequencies += batch_idf
+        self._IDF_frequencies += input_ids.bincount(minlength=self._vocab_size)
         
     def reset_idf(self) -> None:
         self._IDF_corpus_size = 0
@@ -494,8 +493,8 @@ class BiEncoder(nn.Module):
     def idf_embed(self, token_embeddings: torch.Tensor) -> torch.Tensor:
         """Augments word embeddings with IDF information."""
         batch_size, sequence_length, _ = token_embeddings.shape
-        idf_vector = self._idf[None].to(token_embeddings.device)
-        idf_embedding = self.idf_sparse_embed(idf_vector)
+        idf_vector = self._idf.to(token_embeddings.device)
+        idf_embedding = self.idf_sparse_embed(idf_vector[None])
         assert idf_embedding.shape == (1, 768)
         idf_embedding = idf_embedding[None].repeat((batch_size, sequence_length, 1))
         ################################################################################
@@ -517,45 +516,14 @@ class BiEncoder(nn.Module):
         fix_encoder: bool = False,
         representation_token_pos=0,
     ) -> (T, T, T):
-        sequence_output = None
-        pooled_output = None
-        hidden_states = None
-        if ids is not None:
-            if fix_encoder:
-                with torch.no_grad():
-                    sequence_output, pooled_output, hidden_states = sub_model(
-                        input_ids=ids,
-                        token_type_ids=segments,
-                        attention_mask=attn_mask,
-                        representation_token_pos=representation_token_pos,
-                    )
-
-                if sub_model.training:
-                    sequence_output.requires_grad_(requires_grad=True)
-                    pooled_output.requires_grad_(requires_grad=True)
-            else:
-                sequence_output, pooled_output, hidden_states = sub_model(
-                    input_ids=ids,
-                    token_type_ids=segments,
-                    attention_mask=attn_mask,
-                    representation_token_pos=representation_token_pos,
-                )
-
-        return sequence_output, pooled_output, hidden_states
-
-    def get_representation_ctx(
-        self,
-        sub_model: nn.Module,
-        ids: T,
-        segments: T,
-        attn_mask: T,
-        fix_encoder: bool = False,
-        representation_token_pos=0,
-    ) -> (T, T, T):
         """Gets context representation and optionally adds IDF."""
+        if ids is None:
+            return (None, None, None)
         token_embeddings = sub_model.embeddings.word_embeddings.forward(ids)
+
         if self.use_idf_encoder:
-            token_embeddings += self.idf_embed(token_embeddings)
+            gamma = 0.1 # hparm
+            token_embeddings += (gamma * self.idf_embed(token_embeddings))
 
         sequence_output, pooled_output, hidden_states = sub_model(
             attention_mask=attn_mask,
@@ -590,7 +558,7 @@ class BiEncoder(nn.Module):
                 question_ids,
                 question_segments,
                 question_attn_mask,
-                self.fix_q_encoder,
+                fix_encoder=self.fix_q_encoder,
                 representation_token_pos=representation_token_pos,
             )
 
@@ -598,8 +566,8 @@ class BiEncoder(nn.Module):
             ctx_pooled_out = None
         else:
             ctx_encoder = self.ctx_model if encoder_type is None or encoder_type == "ctx" else self.question_model
-            _ctx_seq, ctx_pooled_out, _ctx_hidden = self.get_representation_ctx(
-                ctx_encoder, context_ids, ctx_segments, ctx_attn_mask, self.fix_ctx_encoder
+            _ctx_seq, ctx_pooled_out, _ctx_hidden = self.get_representation(
+                ctx_encoder, context_ids, ctx_segments, ctx_attn_mask, fix_encoder=self.fix_ctx_encoder
             )
 
         return q_pooled_out, ctx_pooled_out
