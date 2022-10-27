@@ -490,7 +490,7 @@ class BiEncoder(nn.Module):
         assert (self._IDF_corpus_size > 0), "can't compute IDF without any documents!"
         return torch.log(self._IDF_corpus_size - self._IDF_frequencies + 0.5) - torch.log(self._IDF_frequencies + 0.5)
     
-    def idf_embed(self, token_embeddings: torch.Tensor) -> torch.Tensor:
+    def idf_embed_tokens(self, token_embeddings: torch.Tensor) -> torch.Tensor:
         """Augments word embeddings with IDF information."""
         batch_size, sequence_length, _ = token_embeddings.shape
         idf_vector = self._idf.to(token_embeddings.device)
@@ -523,7 +523,7 @@ class BiEncoder(nn.Module):
 
         if self.use_idf_encoder:
             gamma = 0.1 # hparm
-            token_embeddings += (gamma * self.idf_embed(token_embeddings))
+            token_embeddings += (gamma * self.idf_embed_tokens(token_embeddings))
 
         sequence_output, pooled_output, hidden_states = sub_model(
             attention_mask=attn_mask,

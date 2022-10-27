@@ -1,0 +1,521 @@
+setting shuffle_positives = True everywhere
+[2022-08-05 13:14:20,701][root][INFO] - CFG's local_rank=-1
+[2022-08-05 13:14:20,703][root][INFO] - Env WORLD_SIZE=None
+[2022-08-05 13:14:20,704][root][INFO] - Initialized host ellis-compute-02.cs.cornell.edu as d.rank -1 on device=cuda, n_gpu=1, world size=1
+[2022-08-05 13:14:20,704][root][INFO] - 16-bits training: False 
+[2022-08-05 13:14:20,717][root][INFO] - CFG (after gpu  configuration):
+[2022-08-05 13:14:20,729][root][INFO] - encoder:
+  encoder_model_type: hf_bert
+  pretrained_model_cfg: bert-base-uncased
+  pretrained_file: null
+  projection_dim: 0
+  sequence_length: 256
+  dropout: 0.1
+  fix_ctx_encoder: false
+  pretrained: true
+train:
+  batch_size: 16
+  dev_batch_size: 64
+  adam_eps: 1.0e-08
+  adam_betas: (0.9, 0.999)
+  max_grad_norm: 2.0
+  log_batch_step: 1
+  train_rolling_loss_step: 100
+  weight_decay: 0.0
+  learning_rate: 1.0e-05
+  warmup_steps: 1237
+  use_min_criteria_for_toggle: false
+  use_full_softmax: false
+  gradient_accumulation_steps: 1
+  shuffle_positives_override: true
+  num_train_epochs: 100
+  eval_per_epoch: 1
+  hard_negatives: 1
+  precomputed_hard_negatives: 1
+  other_negatives: 0
+  val_av_rank_hard_neg: 30
+  val_av_rank_other_neg: 30
+  val_av_rank_bsz: 128
+  val_av_rank_max_qs: 10000
+datasets:
+  nq_train:
+    _target_: dpr.data.biencoder_data.JsonQADataset
+    file: data.retriever.nq-train
+  nq_train_hn1:
+    _target_: dpr.data.biencoder_data.JsonQADataset
+    file: data.retriever.nq-adv-hn-train
+  nq_dev:
+    _target_: dpr.data.biencoder_data.JsonQADataset
+    file: data.retriever.nq-dev
+  trivia_train:
+    _target_: dpr.data.biencoder_data.JsonQADataset
+    file: data.retriever.trivia-train
+  trivia_dev:
+    _target_: dpr.data.biencoder_data.JsonQADataset
+    file: data.retriever.trivia-dev
+  squad1_train:
+    _target_: dpr.data.biencoder_data.JsonQADataset
+    file: data.retriever.squad1-train
+  squad1_dev:
+    _target_: dpr.data.biencoder_data.JsonQADataset
+    file: data.retriever.squad1-dev
+  webq_train:
+    _target_: dpr.data.biencoder_data.JsonQADataset
+    file: data.retriever.webq-train
+  webq_dev:
+    _target_: dpr.data.biencoder_data.JsonQADataset
+    file: data.retriever.webq-dev
+  curatedtrec_train:
+    _target_: dpr.data.biencoder_data.JsonQADataset
+    file: data.retriever.curatedtrec-train
+  curatedtrec_dev:
+    _target_: dpr.data.biencoder_data.JsonQADataset
+    file: data.retriever.curatedtrec-dev
+train_datasets: null
+dev_datasets: nq_dev
+output_dir: null
+train_sampling_rates: null
+loss_scale_factors: null
+do_lower_case: true
+val_av_rank_start_epoch: 0
+seed: 12345
+checkpoint_file_name: dpr_biencoder
+model_file: /home/jxm3/random/DPR/dpr/downloads/checkpoint/retriever/single/nq/bert-base-encoder.cp
+local_rank: -1
+global_loss_buf_sz: 592000
+device: cuda
+distributed_world_size: 1
+distributed_port: null
+distributed_init_method: null
+no_cuda: false
+n_gpu: 1
+fp16: false
+fp16_opt_level: O1
+special_tokens: null
+ignore_checkpoint_offset: false
+ignore_checkpoint_optimizer: false
+ignore_checkpoint_lr: false
+multi_q_encoder: false
+local_shards_dataloader: false
+
+[2022-08-05 13:14:20,730][root][INFO] - ***** Initializing components for training *****
+Loading model state from checkpoint: /home/jxm3/random/DPR/dpr/downloads/checkpoint/retriever/single/nq/bert-base-encoder.cp
+[2022-08-05 13:14:20,735][root][INFO] - Reading saved model from /home/jxm3/random/DPR/dpr/downloads/checkpoint/retriever/single/nq/bert-base-encoder.cp
+[2022-08-05 13:14:24,415][root][INFO] - model_state_dict keys odict_keys(['model_dict', 'optimizer_dict', 'scheduler_dict', 'offset', 'epoch', 'encoder_params'])
+[2022-08-05 13:14:24,456][transformers.file_utils][INFO] - PyTorch version 1.10.2 available.
+[2022-08-05 13:14:25,055][dpr.models.hf_models][INFO] - Initializing HF BERT Encoder. cfg_name=bert-base-uncased
+[2022-08-05 13:14:25,168][transformers.configuration_utils][INFO] - loading configuration file https://s3.amazonaws.com/models.huggingface.co/bert/bert-base-uncased-config.json from cache at /home/jxm3/.cache/torch/transformers/4dad0251492946e18ac39290fcfe91b89d370fee250efe9521476438fe8ca185.7156163d5fdc189c3016baca0775ffce230789d7fa2a42ef516483e4ca884517
+[2022-08-05 13:14:25,170][transformers.configuration_utils][INFO] - Model config BertConfig {
+  "architectures": [
+    "BertForMaskedLM"
+  ],
+  "attention_probs_dropout_prob": 0.1,
+  "gradient_checkpointing": false,
+  "hidden_act": "gelu",
+  "hidden_dropout_prob": 0.1,
+  "hidden_size": 768,
+  "initializer_range": 0.02,
+  "intermediate_size": 3072,
+  "layer_norm_eps": 1e-12,
+  "max_position_embeddings": 512,
+  "model_type": "bert",
+  "num_attention_heads": 12,
+  "num_hidden_layers": 12,
+  "pad_token_id": 0,
+  "type_vocab_size": 2,
+  "vocab_size": 30522
+}
+
+[2022-08-05 13:14:25,252][transformers.modeling_utils][INFO] - loading weights file https://cdn.huggingface.co/bert-base-uncased-pytorch_model.bin from cache at /home/jxm3/.cache/torch/transformers/f2ee78bdd635b758cc0a12352586868bef80e47401abe4c4fcc3832421e7338b.36ca03ab34a1a5d5fa7bc3d03d55c4fa650fed07220e2eeebc06ce58d0e9a157
+[2022-08-05 13:14:28,340][transformers.modeling_utils][INFO] - All model checkpoint weights were used when initializing HFBertEncoder.
+
+[2022-08-05 13:14:28,341][transformers.modeling_utils][INFO] - All the weights of HFBertEncoder were initialized from the model checkpoint at bert-base-uncased.
+If your task is similar to the task the model of the ckeckpoint was trained on, you can already use HFBertEncoder for predictions without further training.
+[2022-08-05 13:14:28,343][dpr.models.hf_models][INFO] - Initializing HF BERT Encoder. cfg_name=bert-base-uncased
+[2022-08-05 13:14:28,567][transformers.configuration_utils][INFO] - loading configuration file https://s3.amazonaws.com/models.huggingface.co/bert/bert-base-uncased-config.json from cache at /home/jxm3/.cache/torch/transformers/4dad0251492946e18ac39290fcfe91b89d370fee250efe9521476438fe8ca185.7156163d5fdc189c3016baca0775ffce230789d7fa2a42ef516483e4ca884517
+[2022-08-05 13:14:28,568][transformers.configuration_utils][INFO] - Model config BertConfig {
+  "architectures": [
+    "BertForMaskedLM"
+  ],
+  "attention_probs_dropout_prob": 0.1,
+  "gradient_checkpointing": false,
+  "hidden_act": "gelu",
+  "hidden_dropout_prob": 0.1,
+  "hidden_size": 768,
+  "initializer_range": 0.02,
+  "intermediate_size": 3072,
+  "layer_norm_eps": 1e-12,
+  "max_position_embeddings": 512,
+  "model_type": "bert",
+  "num_attention_heads": 12,
+  "num_hidden_layers": 12,
+  "pad_token_id": 0,
+  "type_vocab_size": 2,
+  "vocab_size": 30522
+}
+
+[2022-08-05 13:14:28,623][transformers.modeling_utils][INFO] - loading weights file https://cdn.huggingface.co/bert-base-uncased-pytorch_model.bin from cache at /home/jxm3/.cache/torch/transformers/f2ee78bdd635b758cc0a12352586868bef80e47401abe4c4fcc3832421e7338b.36ca03ab34a1a5d5fa7bc3d03d55c4fa650fed07220e2eeebc06ce58d0e9a157
+[2022-08-05 13:14:31,631][transformers.modeling_utils][INFO] - All model checkpoint weights were used when initializing HFBertEncoder.
+
+[2022-08-05 13:14:31,632][transformers.modeling_utils][INFO] - All the weights of HFBertEncoder were initialized from the model checkpoint at bert-base-uncased.
+If your task is similar to the task the model of the ckeckpoint was trained on, you can already use HFBertEncoder for predictions without further training.
+[2022-08-05 13:14:31,774][transformers.tokenization_utils_base][INFO] - loading file https://s3.amazonaws.com/models.huggingface.co/bert/bert-base-uncased-vocab.txt from cache at /home/jxm3/.cache/torch/transformers/26bc1ad6c0ac742e9b52263248f6d0f00068293b33709fae12320c0e35ccfbbb.542ce4285a40d23a559526243235df47c5f75c197f04f37d1a0c124c32c9a084
+[2022-08-05 13:14:37,342][dpr.utils.conf_utils][INFO] - train_datasets: None
+[2022-08-05 13:14:37,342][dpr.utils.conf_utils][INFO] - dev_datasets: nq_dev
+ds_cfg: dict_keys(['nq_train', 'nq_train_hn1', 'nq_dev', 'trivia_train', 'trivia_dev', 'squad1_train', 'squad1_dev', 'webq_train', 'webq_dev', 'curatedtrec_train', 'curatedtrec_dev'])
+*** Loading model saved state
+[2022-08-05 13:14:37,345][root][INFO] - Loading checkpoint @ batch=0 and epoch=1
+[2022-08-05 13:14:37,345][root][INFO] - Loading saved model state ...
+*** Loaded state dict ***
+[2022-08-05 13:14:37,605][root][INFO] - Saved state loaded
+[2022-08-05 13:14:37,623][root][INFO] - No train files are specified. Run 2 types of validation for specified model file
+[2022-08-05 13:14:37,623][root][INFO] - NLL validation ...
+[2022-08-05 13:14:37,624][root][INFO] - Initializing task/set data nq_dev
+getting dev set with shuffle=False
+[2022-08-05 13:14:37,624][root][INFO] - Calculating shard positions
+[2022-08-05 13:14:37,624][dpr.data.biencoder_data][INFO] - Loading all data
+[2022-08-05 13:14:37,629][dpr.data.download_data][INFO] - Requested resource from https://dl.fbaipublicfiles.com/dpr/data/retriever/biencoder-nq-dev.json.gz
+[2022-08-05 13:14:37,629][dpr.data.download_data][INFO] - Download root_dir /home/jxm3/random/DPR
+[2022-08-05 13:14:37,630][dpr.data.download_data][INFO] - File to be downloaded as /home/jxm3/random/DPR/downloads/data/retriever/nq-dev.json
+[2022-08-05 13:14:37,630][dpr.data.download_data][INFO] - File already exist /home/jxm3/random/DPR/downloads/data/retriever/nq-dev.json
+[2022-08-05 13:14:37,630][dpr.data.download_data][INFO] - Loading from https://dl.fbaipublicfiles.com/dpr/nq_license/LICENSE
+[2022-08-05 13:14:37,631][dpr.data.download_data][INFO] - File already exist /home/jxm3/random/DPR/downloads/data/retriever/LICENSE
+[2022-08-05 13:14:37,631][dpr.data.download_data][INFO] - Loading from https://dl.fbaipublicfiles.com/dpr/nq_license/README
+[2022-08-05 13:14:37,631][dpr.data.download_data][INFO] - File already exist /home/jxm3/random/DPR/downloads/data/retriever/README
+[2022-08-05 13:14:37,631][dpr.data.biencoder_data][INFO] - Data files: ['/home/jxm3/random/DPR/downloads/data/retriever/nq-dev.json']
+[2022-08-05 13:14:37,632][root][INFO] - Reading file /home/jxm3/random/DPR/downloads/data/retriever/nq-dev.json
+[2022-08-05 13:14:40,731][root][INFO] - Aggregated data size: 6515
+[2022-08-05 13:14:40,736][dpr.data.biencoder_data][INFO] - Total cleaned data size: 6515
+[2022-08-05 13:14:40,736][root][INFO] - samples_per_shard=6515, shard_start_idx=0, shard_end_idx=6515, max_iterations=101
+[2022-08-05 13:14:40,736][root][INFO] - Sharded dataset data 6515
+[2022-08-05 13:14:40,736][root][INFO] - rank=-1; Multi set data sizes [6515]
+[2022-08-05 13:14:40,736][root][INFO] - rank=-1; Multi set total data 6515
+[2022-08-05 13:14:40,736][root][INFO] - rank=-1; Multi set sampling_rates [1]
+[2022-08-05 13:14:40,736][root][INFO] - rank=-1; Multi set max_iterations per dataset [101]
+[2022-08-05 13:14:40,736][root][INFO] - rank=-1; Multi set max_iterations 101
+set biencoder.use_min_criteria_for_toggle = False
+validate_nll num_hard_negatives = 1 / num_other_negatives = 0
+[2022-08-05 13:14:40,737][root][INFO] - rank=-1; Iteration start
+[2022-08-05 13:14:40,737][root][INFO] - rank=-1; Multi set iteration: iteration ptr per set: [0]
+[2022-08-05 13:14:40,737][root][INFO] - rank=-1; Multi set iteration: source 0, batches to be taken: 101
+[2022-08-05 13:14:40,737][root][INFO] - rank=-1; data_src_indices len=101
+[2022-08-05 13:14:40,752][root][INFO] - Eval step: 0 ,rnk=-1
+[2022-08-05 13:14:42,403][root][INFO] - Eval step: 0 , used_time=1.666241 sec., loss=0.342284 
+[2022-08-05 13:14:42,415][root][INFO] - Eval step: 1 ,rnk=-1
+[2022-08-05 13:14:43,344][root][INFO] - Eval step: 1 , used_time=2.607739 sec., loss=0.311716 
+[2022-08-05 13:14:43,459][root][INFO] - Eval step: 2 ,rnk=-1
+[2022-08-05 13:14:44,483][root][INFO] - Eval step: 2 , used_time=3.746554 sec., loss=0.733808 
+[2022-08-05 13:14:44,501][root][INFO] - Eval step: 3 ,rnk=-1
+[2022-08-05 13:14:45,535][root][INFO] - Eval step: 3 , used_time=4.798953 sec., loss=0.322548 
+[2022-08-05 13:14:45,553][root][INFO] - Eval step: 4 ,rnk=-1
+[2022-08-05 13:14:46,500][root][INFO] - Eval step: 4 , used_time=5.763973 sec., loss=0.193927 
+[2022-08-05 13:14:46,512][root][INFO] - Eval step: 5 ,rnk=-1
+[2022-08-05 13:14:47,441][root][INFO] - Eval step: 5 , used_time=6.704674 sec., loss=0.149689 
+[2022-08-05 13:14:47,452][root][INFO] - Eval step: 6 ,rnk=-1
+[2022-08-05 13:14:48,382][root][INFO] - Eval step: 6 , used_time=7.646079 sec., loss=0.252756 
+[2022-08-05 13:14:48,394][root][INFO] - Eval step: 7 ,rnk=-1
+[2022-08-05 13:14:49,325][root][INFO] - Eval step: 7 , used_time=8.588688 sec., loss=0.146966 
+[2022-08-05 13:14:49,337][root][INFO] - Eval step: 8 ,rnk=-1
+[2022-08-05 13:14:50,272][root][INFO] - Eval step: 8 , used_time=9.535475 sec., loss=0.087121 
+[2022-08-05 13:14:50,284][root][INFO] - Eval step: 9 ,rnk=-1
+[2022-08-05 13:14:51,216][root][INFO] - Eval step: 9 , used_time=10.479178 sec., loss=0.039891 
+[2022-08-05 13:14:51,227][root][INFO] - Eval step: 10 ,rnk=-1
+[2022-08-05 13:14:52,163][root][INFO] - Eval step: 10 , used_time=11.427069 sec., loss=0.079969 
+[2022-08-05 13:14:52,311][root][INFO] - Eval step: 11 ,rnk=-1
+[2022-08-05 13:14:53,250][root][INFO] - Eval step: 11 , used_time=12.513330 sec., loss=0.832306 
+[2022-08-05 13:14:53,262][root][INFO] - Eval step: 12 ,rnk=-1
+[2022-08-05 13:14:54,201][root][INFO] - Eval step: 12 , used_time=13.464090 sec., loss=0.589687 
+[2022-08-05 13:14:54,226][root][INFO] - Eval step: 13 ,rnk=-1
+[2022-08-05 13:14:55,258][root][INFO] - Eval step: 13 , used_time=14.522004 sec., loss=0.204302 
+[2022-08-05 13:14:55,278][root][INFO] - Eval step: 14 ,rnk=-1
+[2022-08-05 13:14:56,312][root][INFO] - Eval step: 14 , used_time=15.575750 sec., loss=0.374407 
+[2022-08-05 13:14:56,333][root][INFO] - Eval step: 15 ,rnk=-1
+[2022-08-05 13:14:57,332][root][INFO] - Eval step: 15 , used_time=16.595600 sec., loss=0.466465 
+[2022-08-05 13:14:57,345][root][INFO] - Eval step: 16 ,rnk=-1
+[2022-08-05 13:14:58,279][root][INFO] - Eval step: 16 , used_time=17.542718 sec., loss=0.123265 
+[2022-08-05 13:14:58,293][root][INFO] - Eval step: 17 ,rnk=-1
+[2022-08-05 13:14:59,227][root][INFO] - Eval step: 17 , used_time=18.490739 sec., loss=0.072128 
+[2022-08-05 13:14:59,240][root][INFO] - Eval step: 18 ,rnk=-1
+[2022-08-05 13:15:00,175][root][INFO] - Eval step: 18 , used_time=19.438164 sec., loss=0.180394 
+[2022-08-05 13:15:00,187][root][INFO] - Eval step: 19 ,rnk=-1
+[2022-08-05 13:15:01,121][root][INFO] - Eval step: 19 , used_time=20.384872 sec., loss=0.457185 
+[2022-08-05 13:15:01,134][root][INFO] - Eval step: 20 ,rnk=-1
+[2022-08-05 13:15:02,066][root][INFO] - Eval step: 20 , used_time=21.329931 sec., loss=0.680951 
+[2022-08-05 13:15:02,176][root][INFO] - Eval step: 21 ,rnk=-1
+[2022-08-05 13:15:03,111][root][INFO] - Eval step: 21 , used_time=22.374135 sec., loss=0.638988 
+[2022-08-05 13:15:03,124][root][INFO] - Eval step: 22 ,rnk=-1
+[2022-08-05 13:15:04,061][root][INFO] - Eval step: 22 , used_time=23.324160 sec., loss=0.099223 
+[2022-08-05 13:15:04,073][root][INFO] - Eval step: 23 ,rnk=-1
+[2022-08-05 13:15:05,009][root][INFO] - Eval step: 23 , used_time=24.272278 sec., loss=0.208331 
+[2022-08-05 13:15:05,021][root][INFO] - Eval step: 24 ,rnk=-1
+[2022-08-05 13:15:05,956][root][INFO] - Eval step: 24 , used_time=25.219290 sec., loss=0.238398 
+[2022-08-05 13:15:05,968][root][INFO] - Eval step: 25 ,rnk=-1
+[2022-08-05 13:15:06,905][root][INFO] - Eval step: 25 , used_time=26.168674 sec., loss=0.130811 
+[2022-08-05 13:15:06,918][root][INFO] - Eval step: 26 ,rnk=-1
+[2022-08-05 13:15:07,852][root][INFO] - Eval step: 26 , used_time=27.115636 sec., loss=0.446921 
+[2022-08-05 13:15:07,865][root][INFO] - Eval step: 27 ,rnk=-1
+[2022-08-05 13:15:08,799][root][INFO] - Eval step: 27 , used_time=28.062371 sec., loss=0.265618 
+[2022-08-05 13:15:08,811][root][INFO] - Eval step: 28 ,rnk=-1
+[2022-08-05 13:15:09,758][root][INFO] - Eval step: 28 , used_time=29.021289 sec., loss=0.380093 
+[2022-08-05 13:15:09,771][root][INFO] - Eval step: 29 ,rnk=-1
+[2022-08-05 13:15:10,709][root][INFO] - Eval step: 29 , used_time=29.972321 sec., loss=0.458148 
+[2022-08-05 13:15:10,815][root][INFO] - Eval step: 30 ,rnk=-1
+[2022-08-05 13:15:11,761][root][INFO] - Eval step: 30 , used_time=31.024142 sec., loss=0.213953 
+[2022-08-05 13:15:11,774][root][INFO] - Eval step: 31 ,rnk=-1
+[2022-08-05 13:15:12,710][root][INFO] - Eval step: 31 , used_time=31.973634 sec., loss=0.188515 
+[2022-08-05 13:15:12,723][root][INFO] - Eval step: 32 ,rnk=-1
+[2022-08-05 13:15:13,660][root][INFO] - Eval step: 32 , used_time=32.923615 sec., loss=0.383854 
+[2022-08-05 13:15:13,673][root][INFO] - Eval step: 33 ,rnk=-1
+[2022-08-05 13:15:14,611][root][INFO] - Eval step: 33 , used_time=33.874830 sec., loss=0.090750 
+[2022-08-05 13:15:14,624][root][INFO] - Eval step: 34 ,rnk=-1
+[2022-08-05 13:15:15,559][root][INFO] - Eval step: 34 , used_time=34.822428 sec., loss=0.186042 
+[2022-08-05 13:15:15,571][root][INFO] - Eval step: 35 ,rnk=-1
+[2022-08-05 13:15:16,511][root][INFO] - Eval step: 35 , used_time=35.775083 sec., loss=0.578183 
+[2022-08-05 13:15:16,524][root][INFO] - Eval step: 36 ,rnk=-1
+[2022-08-05 13:15:17,462][root][INFO] - Eval step: 36 , used_time=36.726074 sec., loss=0.305416 
+[2022-08-05 13:15:17,475][root][INFO] - Eval step: 37 ,rnk=-1
+[2022-08-05 13:15:18,494][root][INFO] - Eval step: 37 , used_time=37.757767 sec., loss=0.368596 
+[2022-08-05 13:15:18,514][root][INFO] - Eval step: 38 ,rnk=-1
+[2022-08-05 13:15:19,549][root][INFO] - Eval step: 38 , used_time=38.812125 sec., loss=0.115203 
+[2022-08-05 13:15:19,570][root][INFO] - Eval step: 39 ,rnk=-1
+[2022-08-05 13:15:20,601][root][INFO] - Eval step: 39 , used_time=39.865030 sec., loss=0.312386 
+[2022-08-05 13:15:20,809][root][INFO] - Eval step: 40 ,rnk=-1
+[2022-08-05 13:15:21,854][root][INFO] - Eval step: 40 , used_time=41.117394 sec., loss=0.374244 
+[2022-08-05 13:15:21,874][root][INFO] - Eval step: 41 ,rnk=-1
+[2022-08-05 13:15:22,910][root][INFO] - Eval step: 41 , used_time=42.173996 sec., loss=0.353949 
+[2022-08-05 13:15:22,924][root][INFO] - Eval step: 42 ,rnk=-1
+[2022-08-05 13:15:23,862][root][INFO] - Eval step: 42 , used_time=43.125284 sec., loss=0.142544 
+[2022-08-05 13:15:23,874][root][INFO] - Eval step: 43 ,rnk=-1
+[2022-08-05 13:15:24,808][root][INFO] - Eval step: 43 , used_time=44.071723 sec., loss=0.162670 
+[2022-08-05 13:15:24,821][root][INFO] - Eval step: 44 ,rnk=-1
+[2022-08-05 13:15:25,755][root][INFO] - Eval step: 44 , used_time=45.018880 sec., loss=0.342356 
+[2022-08-05 13:15:25,768][root][INFO] - Eval step: 45 ,rnk=-1
+[2022-08-05 13:15:26,710][root][INFO] - Eval step: 45 , used_time=45.973801 sec., loss=0.300868 
+[2022-08-05 13:15:26,733][root][INFO] - Eval step: 46 ,rnk=-1
+[2022-08-05 13:15:27,758][root][INFO] - Eval step: 46 , used_time=47.021405 sec., loss=0.423739 
+[2022-08-05 13:15:27,778][root][INFO] - Eval step: 47 ,rnk=-1
+[2022-08-05 13:15:28,806][root][INFO] - Eval step: 47 , used_time=48.069693 sec., loss=0.300484 
+[2022-08-05 13:15:28,826][root][INFO] - Eval step: 48 ,rnk=-1
+[2022-08-05 13:15:29,801][root][INFO] - Eval step: 48 , used_time=49.064330 sec., loss=0.351181 
+[2022-08-05 13:15:29,922][root][INFO] - Eval step: 49 ,rnk=-1
+[2022-08-05 13:15:30,861][root][INFO] - Eval step: 49 , used_time=50.124585 sec., loss=0.310808 
+[2022-08-05 13:15:30,874][root][INFO] - Eval step: 50 ,rnk=-1
+[2022-08-05 13:15:31,809][root][INFO] - Eval step: 50 , used_time=51.072396 sec., loss=0.328179 
+[2022-08-05 13:15:31,826][root][INFO] - Eval step: 51 ,rnk=-1
+[2022-08-05 13:15:32,762][root][INFO] - Eval step: 51 , used_time=52.025122 sec., loss=0.364104 
+[2022-08-05 13:15:32,774][root][INFO] - Eval step: 52 ,rnk=-1
+[2022-08-05 13:15:33,708][root][INFO] - Eval step: 52 , used_time=52.971760 sec., loss=0.082565 
+[2022-08-05 13:15:33,721][root][INFO] - Eval step: 53 ,rnk=-1
+[2022-08-05 13:15:34,656][root][INFO] - Eval step: 53 , used_time=53.919564 sec., loss=0.541809 
+[2022-08-05 13:15:34,669][root][INFO] - Eval step: 54 ,rnk=-1
+[2022-08-05 13:15:35,605][root][INFO] - Eval step: 54 , used_time=54.868460 sec., loss=0.167658 
+[2022-08-05 13:15:35,618][root][INFO] - Eval step: 55 ,rnk=-1
+[2022-08-05 13:15:36,556][root][INFO] - Eval step: 55 , used_time=55.819094 sec., loss=0.295164 
+[2022-08-05 13:15:36,568][root][INFO] - Eval step: 56 ,rnk=-1
+[2022-08-05 13:15:37,505][root][INFO] - Eval step: 56 , used_time=56.768947 sec., loss=0.538660 
+[2022-08-05 13:15:37,518][root][INFO] - Eval step: 57 ,rnk=-1
+[2022-08-05 13:15:38,454][root][INFO] - Eval step: 57 , used_time=57.717899 sec., loss=0.168684 
+[2022-08-05 13:15:38,467][root][INFO] - Eval step: 58 ,rnk=-1
+[2022-08-05 13:15:39,405][root][INFO] - Eval step: 58 , used_time=58.668865 sec., loss=0.204655 
+[2022-08-05 13:15:39,511][root][INFO] - Eval step: 59 ,rnk=-1
+[2022-08-05 13:15:40,451][root][INFO] - Eval step: 59 , used_time=59.714106 sec., loss=0.250032 
+[2022-08-05 13:15:40,463][root][INFO] - Eval step: 60 ,rnk=-1
+[2022-08-05 13:15:41,401][root][INFO] - Eval step: 60 , used_time=60.665007 sec., loss=0.378140 
+[2022-08-05 13:15:41,414][root][INFO] - Eval step: 61 ,rnk=-1
+[2022-08-05 13:15:42,353][root][INFO] - Eval step: 61 , used_time=61.616642 sec., loss=0.575222 
+[2022-08-05 13:15:42,366][root][INFO] - Eval step: 62 ,rnk=-1
+[2022-08-05 13:15:43,312][root][INFO] - Eval step: 62 , used_time=62.575821 sec., loss=0.545772 
+[2022-08-05 13:15:43,325][root][INFO] - Eval step: 63 ,rnk=-1
+[2022-08-05 13:15:44,269][root][INFO] - Eval step: 63 , used_time=63.532723 sec., loss=0.138561 
+[2022-08-05 13:15:44,282][root][INFO] - Eval step: 64 ,rnk=-1
+[2022-08-05 13:15:45,221][root][INFO] - Eval step: 64 , used_time=64.484300 sec., loss=0.310728 
+[2022-08-05 13:15:45,234][root][INFO] - Eval step: 65 ,rnk=-1
+[2022-08-05 13:15:46,171][root][INFO] - Eval step: 65 , used_time=65.434664 sec., loss=0.467466 
+[2022-08-05 13:15:46,184][root][INFO] - Eval step: 66 ,rnk=-1
+[2022-08-05 13:15:47,121][root][INFO] - Eval step: 66 , used_time=66.384615 sec., loss=0.327583 
+[2022-08-05 13:15:47,133][root][INFO] - Eval step: 67 ,rnk=-1
+[2022-08-05 13:15:48,078][root][INFO] - Eval step: 67 , used_time=67.341572 sec., loss=0.485840 
+[2022-08-05 13:15:48,182][root][INFO] - Eval step: 68 ,rnk=-1
+[2022-08-05 13:15:49,122][root][INFO] - Eval step: 68 , used_time=68.385694 sec., loss=0.445127 
+[2022-08-05 13:15:49,135][root][INFO] - Eval step: 69 ,rnk=-1
+[2022-08-05 13:15:50,072][root][INFO] - Eval step: 69 , used_time=69.335704 sec., loss=0.109455 
+[2022-08-05 13:15:50,085][root][INFO] - Eval step: 70 ,rnk=-1
+[2022-08-05 13:15:51,024][root][INFO] - Eval step: 70 , used_time=70.287309 sec., loss=0.114466 
+[2022-08-05 13:15:51,036][root][INFO] - Eval step: 71 ,rnk=-1
+[2022-08-05 13:15:51,982][root][INFO] - Eval step: 71 , used_time=71.245922 sec., loss=0.167422 
+[2022-08-05 13:15:51,995][root][INFO] - Eval step: 72 ,rnk=-1
+[2022-08-05 13:15:52,937][root][INFO] - Eval step: 72 , used_time=72.200179 sec., loss=0.227786 
+[2022-08-05 13:15:52,949][root][INFO] - Eval step: 73 ,rnk=-1
+[2022-08-05 13:15:53,890][root][INFO] - Eval step: 73 , used_time=73.153340 sec., loss=0.226441 
+[2022-08-05 13:15:53,902][root][INFO] - Eval step: 74 ,rnk=-1
+[2022-08-05 13:15:54,842][root][INFO] - Eval step: 74 , used_time=74.105559 sec., loss=0.336863 
+[2022-08-05 13:15:54,855][root][INFO] - Eval step: 75 ,rnk=-1
+[2022-08-05 13:15:55,800][root][INFO] - Eval step: 75 , used_time=75.063647 sec., loss=0.247027 
+[2022-08-05 13:15:55,813][root][INFO] - Eval step: 76 ,rnk=-1
+[2022-08-05 13:15:56,753][root][INFO] - Eval step: 76 , used_time=76.016387 sec., loss=0.299192 
+[2022-08-05 13:15:56,765][root][INFO] - Eval step: 77 ,rnk=-1
+[2022-08-05 13:15:57,707][root][INFO] - Eval step: 77 , used_time=76.970179 sec., loss=0.131997 
+[2022-08-05 13:15:57,810][root][INFO] - Eval step: 78 ,rnk=-1
+[2022-08-05 13:15:58,751][root][INFO] - Eval step: 78 , used_time=78.014396 sec., loss=0.185921 
+[2022-08-05 13:15:58,764][root][INFO] - Eval step: 79 ,rnk=-1
+[2022-08-05 13:15:59,703][root][INFO] - Eval step: 79 , used_time=78.966614 sec., loss=0.468437 
+[2022-08-05 13:15:59,716][root][INFO] - Eval step: 80 ,rnk=-1
+[2022-08-05 13:16:00,657][root][INFO] - Eval step: 80 , used_time=79.920832 sec., loss=0.489623 
+[2022-08-05 13:16:00,670][root][INFO] - Eval step: 81 ,rnk=-1
+[2022-08-05 13:16:01,612][root][INFO] - Eval step: 81 , used_time=80.875345 sec., loss=0.189366 
+[2022-08-05 13:16:01,624][root][INFO] - Eval step: 82 ,rnk=-1
+[2022-08-05 13:16:02,564][root][INFO] - Eval step: 82 , used_time=81.827527 sec., loss=0.379585 
+[2022-08-05 13:16:02,576][root][INFO] - Eval step: 83 ,rnk=-1
+[2022-08-05 13:16:03,518][root][INFO] - Eval step: 83 , used_time=82.781783 sec., loss=0.645808 
+[2022-08-05 13:16:03,531][root][INFO] - Eval step: 84 ,rnk=-1
+[2022-08-05 13:16:04,473][root][INFO] - Eval step: 84 , used_time=83.736961 sec., loss=0.213706 
+[2022-08-05 13:16:04,486][root][INFO] - Eval step: 85 ,rnk=-1
+[2022-08-05 13:16:05,428][root][INFO] - Eval step: 85 , used_time=84.691992 sec., loss=0.875162 
+[2022-08-05 13:16:05,441][root][INFO] - Eval step: 86 ,rnk=-1
+[2022-08-05 13:16:06,381][root][INFO] - Eval step: 86 , used_time=85.644677 sec., loss=0.400483 
+[2022-08-05 13:16:06,497][root][INFO] - Eval step: 87 ,rnk=-1
+[2022-08-05 13:16:07,438][root][INFO] - Eval step: 87 , used_time=86.701483 sec., loss=0.283202 
+[2022-08-05 13:16:07,451][root][INFO] - Eval step: 88 ,rnk=-1
+[2022-08-05 13:16:08,391][root][INFO] - Eval step: 88 , used_time=87.654647 sec., loss=0.379754 
+[2022-08-05 13:16:08,404][root][INFO] - Eval step: 89 ,rnk=-1
+[2022-08-05 13:16:09,347][root][INFO] - Eval step: 89 , used_time=88.610126 sec., loss=0.236269 
+[2022-08-05 13:16:09,359][root][INFO] - Eval step: 90 ,rnk=-1
+[2022-08-05 13:16:10,304][root][INFO] - Eval step: 90 , used_time=89.567452 sec., loss=0.279979 
+[2022-08-05 13:16:10,317][root][INFO] - Eval step: 91 ,rnk=-1
+[2022-08-05 13:16:11,258][root][INFO] - Eval step: 91 , used_time=90.521435 sec., loss=0.175611 
+[2022-08-05 13:16:11,271][root][INFO] - Eval step: 92 ,rnk=-1
+[2022-08-05 13:16:12,211][root][INFO] - Eval step: 92 , used_time=91.474207 sec., loss=0.480850 
+[2022-08-05 13:16:12,223][root][INFO] - Eval step: 93 ,rnk=-1
+[2022-08-05 13:16:13,164][root][INFO] - Eval step: 93 , used_time=92.427310 sec., loss=0.095279 
+[2022-08-05 13:16:13,177][root][INFO] - Eval step: 94 ,rnk=-1
+[2022-08-05 13:16:14,118][root][INFO] - Eval step: 94 , used_time=93.381348 sec., loss=0.516116 
+[2022-08-05 13:16:14,130][root][INFO] - Eval step: 95 ,rnk=-1
+[2022-08-05 13:16:15,075][root][INFO] - Eval step: 95 , used_time=94.338091 sec., loss=0.094966 
+[2022-08-05 13:16:15,087][root][INFO] - Eval step: 96 ,rnk=-1
+[2022-08-05 13:16:16,026][root][INFO] - Eval step: 96 , used_time=95.289876 sec., loss=0.066792 
+[2022-08-05 13:16:16,165][root][INFO] - Eval step: 97 ,rnk=-1
+[2022-08-05 13:16:17,111][root][INFO] - Eval step: 97 , used_time=96.374332 sec., loss=0.249286 
+[2022-08-05 13:16:17,124][root][INFO] - Eval step: 98 ,rnk=-1
+[2022-08-05 13:16:18,068][root][INFO] - Eval step: 98 , used_time=97.331658 sec., loss=0.304623 
+[2022-08-05 13:16:18,081][root][INFO] - Eval step: 99 ,rnk=-1
+[2022-08-05 13:16:19,021][root][INFO] - Eval step: 99 , used_time=98.284445 sec., loss=0.288047 
+[2022-08-05 13:16:19,033][root][INFO] - Eval step: 100 ,rnk=-1
+[2022-08-05 13:16:19,975][root][INFO] - Eval step: 100 , used_time=99.238730 sec., loss=0.239661 
+[2022-08-05 13:16:19,975][root][INFO] - rank=-1; last iteration 101
+[2022-08-05 13:16:19,975][root][INFO] - rank=-1; Multi set iteration finished: iteration per set: [101]
+[2022-08-05 13:16:19,975][root][INFO] - Finished iterating, iteration=101, shard=0
+[2022-08-05 13:16:19,975][root][INFO] - rank=-1; Multi set iteration finished after next: iteration per set: [0]
+[2022-08-05 13:16:19,976][root][INFO] - NLL Validation: loss = 0.310190. correct prediction ratio  5906/6464 ~  0.913676
+[2022-08-05 13:16:19,976][root][INFO] - Average rank validation ...
+[2022-08-05 13:16:19,977][root][INFO] - rank=-1; Iteration start
+[2022-08-05 13:16:19,977][root][INFO] - rank=-1; Multi set iteration: iteration ptr per set: [0]
+[2022-08-05 13:16:19,977][root][INFO] - rank=-1; Multi set iteration: source 0, batches to be taken: 101
+[2022-08-05 13:16:19,977][root][INFO] - rank=-1; data_src_indices len=101
+[2022-08-05 13:16:41,310][root][INFO] - Av.rank validation: step 0, computed ctx_vectors 3904, q_vectors 64
+[2022-08-05 13:17:02,256][root][INFO] - Av.rank validation: step 1, computed ctx_vectors 7808, q_vectors 128
+[2022-08-05 13:17:23,294][root][INFO] - Av.rank validation: step 2, computed ctx_vectors 11703, q_vectors 192
+[2022-08-05 13:17:44,269][root][INFO] - Av.rank validation: step 3, computed ctx_vectors 15602, q_vectors 256
+[2022-08-05 13:18:05,241][root][INFO] - Av.rank validation: step 4, computed ctx_vectors 19506, q_vectors 320
+[2022-08-05 13:18:26,128][root][INFO] - Av.rank validation: step 5, computed ctx_vectors 23389, q_vectors 384
+[2022-08-05 13:18:47,266][root][INFO] - Av.rank validation: step 6, computed ctx_vectors 27293, q_vectors 448
+[2022-08-05 13:19:08,157][root][INFO] - Av.rank validation: step 7, computed ctx_vectors 31174, q_vectors 512
+[2022-08-05 13:19:29,131][root][INFO] - Av.rank validation: step 8, computed ctx_vectors 35078, q_vectors 576
+[2022-08-05 13:19:50,152][root][INFO] - Av.rank validation: step 9, computed ctx_vectors 38982, q_vectors 640
+[2022-08-05 13:20:11,055][root][INFO] - Av.rank validation: step 10, computed ctx_vectors 42870, q_vectors 704
+[2022-08-05 13:20:32,062][root][INFO] - Av.rank validation: step 11, computed ctx_vectors 46747, q_vectors 768
+[2022-08-05 13:20:52,899][root][INFO] - Av.rank validation: step 12, computed ctx_vectors 50622, q_vectors 832
+[2022-08-05 13:21:13,709][root][INFO] - Av.rank validation: step 13, computed ctx_vectors 54495, q_vectors 896
+[2022-08-05 13:21:34,716][root][INFO] - Av.rank validation: step 14, computed ctx_vectors 58399, q_vectors 960
+[2022-08-05 13:21:55,796][root][INFO] - Av.rank validation: step 15, computed ctx_vectors 62292, q_vectors 1024
+[2022-08-05 13:22:16,771][root][INFO] - Av.rank validation: step 16, computed ctx_vectors 66196, q_vectors 1088
+[2022-08-05 13:22:37,763][root][INFO] - Av.rank validation: step 17, computed ctx_vectors 70100, q_vectors 1152
+[2022-08-05 13:22:58,728][root][INFO] - Av.rank validation: step 18, computed ctx_vectors 74004, q_vectors 1216
+[2022-08-05 13:23:19,508][root][INFO] - Av.rank validation: step 19, computed ctx_vectors 77871, q_vectors 1280
+[2022-08-05 13:23:40,545][root][INFO] - Av.rank validation: step 20, computed ctx_vectors 81750, q_vectors 1344
+[2022-08-05 13:24:01,381][root][INFO] - Av.rank validation: step 21, computed ctx_vectors 85631, q_vectors 1408
+[2022-08-05 13:24:22,718][root][INFO] - Av.rank validation: step 22, computed ctx_vectors 89533, q_vectors 1472
+[2022-08-05 13:24:43,616][root][INFO] - Av.rank validation: step 23, computed ctx_vectors 93419, q_vectors 1536
+[2022-08-05 13:25:04,376][root][INFO] - Av.rank validation: step 24, computed ctx_vectors 97280, q_vectors 1600
+[2022-08-05 13:25:25,546][root][INFO] - Av.rank validation: step 25, computed ctx_vectors 101184, q_vectors 1664
+[2022-08-05 13:25:46,517][root][INFO] - Av.rank validation: step 26, computed ctx_vectors 105088, q_vectors 1728
+[2022-08-05 13:26:07,514][root][INFO] - Av.rank validation: step 27, computed ctx_vectors 108992, q_vectors 1792
+[2022-08-05 13:26:28,373][root][INFO] - Av.rank validation: step 28, computed ctx_vectors 112865, q_vectors 1856
+[2022-08-05 13:26:49,541][root][INFO] - Av.rank validation: step 29, computed ctx_vectors 116769, q_vectors 1920
+[2022-08-05 13:27:10,552][root][INFO] - Av.rank validation: step 30, computed ctx_vectors 120669, q_vectors 1984
+[2022-08-05 13:27:31,568][root][INFO] - Av.rank validation: step 31, computed ctx_vectors 124573, q_vectors 2048
+[2022-08-05 13:27:52,894][root][INFO] - Av.rank validation: step 32, computed ctx_vectors 128477, q_vectors 2112
+[2022-08-05 13:28:13,919][root][INFO] - Av.rank validation: step 33, computed ctx_vectors 132381, q_vectors 2176
+[2022-08-05 13:28:34,945][root][INFO] - Av.rank validation: step 34, computed ctx_vectors 136259, q_vectors 2240
+[2022-08-05 13:28:55,983][root][INFO] - Av.rank validation: step 35, computed ctx_vectors 140163, q_vectors 2304
+[2022-08-05 13:29:16,852][root][INFO] - Av.rank validation: step 36, computed ctx_vectors 144039, q_vectors 2368
+[2022-08-05 13:29:37,680][root][INFO] - Av.rank validation: step 37, computed ctx_vectors 147907, q_vectors 2432
+[2022-08-05 13:29:59,289][root][INFO] - Av.rank validation: step 38, computed ctx_vectors 151811, q_vectors 2496
+[2022-08-05 13:30:20,291][root][INFO] - Av.rank validation: step 39, computed ctx_vectors 155715, q_vectors 2560
+[2022-08-05 13:30:41,308][root][INFO] - Av.rank validation: step 40, computed ctx_vectors 159619, q_vectors 2624
+[2022-08-05 13:31:02,405][root][INFO] - Av.rank validation: step 41, computed ctx_vectors 163499, q_vectors 2688
+[2022-08-05 13:31:23,941][root][INFO] - Av.rank validation: step 42, computed ctx_vectors 167390, q_vectors 2752
+[2022-08-05 13:31:44,964][root][INFO] - Av.rank validation: step 43, computed ctx_vectors 171294, q_vectors 2816
+[2022-08-05 13:32:05,964][root][INFO] - Av.rank validation: step 44, computed ctx_vectors 175198, q_vectors 2880
+[2022-08-05 13:32:26,856][root][INFO] - Av.rank validation: step 45, computed ctx_vectors 179076, q_vectors 2944
+[2022-08-05 13:32:47,901][root][INFO] - Av.rank validation: step 46, computed ctx_vectors 182980, q_vectors 3008
+[2022-08-05 13:33:09,042][root][INFO] - Av.rank validation: step 47, computed ctx_vectors 186872, q_vectors 3072
+[2022-08-05 13:33:30,069][root][INFO] - Av.rank validation: step 48, computed ctx_vectors 190776, q_vectors 3136
+[2022-08-05 13:33:51,110][root][INFO] - Av.rank validation: step 49, computed ctx_vectors 194680, q_vectors 3200
+[2022-08-05 13:34:11,935][root][INFO] - Av.rank validation: step 50, computed ctx_vectors 198548, q_vectors 3264
+[2022-08-05 13:34:32,960][root][INFO] - Av.rank validation: step 51, computed ctx_vectors 202452, q_vectors 3328
+[2022-08-05 13:34:53,960][root][INFO] - Av.rank validation: step 52, computed ctx_vectors 206356, q_vectors 3392
+[2022-08-05 13:35:14,822][root][INFO] - Av.rank validation: step 53, computed ctx_vectors 210234, q_vectors 3456
+[2022-08-05 13:35:35,851][root][INFO] - Av.rank validation: step 54, computed ctx_vectors 214109, q_vectors 3520
+[2022-08-05 13:35:56,746][root][INFO] - Av.rank validation: step 55, computed ctx_vectors 217993, q_vectors 3584
+[2022-08-05 13:36:17,753][root][INFO] - Av.rank validation: step 56, computed ctx_vectors 221896, q_vectors 3648
+[2022-08-05 13:36:38,653][root][INFO] - Av.rank validation: step 57, computed ctx_vectors 225782, q_vectors 3712
+[2022-08-05 13:37:00,057][root][INFO] - Av.rank validation: step 58, computed ctx_vectors 229686, q_vectors 3776
+[2022-08-05 13:37:21,069][root][INFO] - Av.rank validation: step 59, computed ctx_vectors 233590, q_vectors 3840
+[2022-08-05 13:37:42,045][root][INFO] - Av.rank validation: step 60, computed ctx_vectors 237494, q_vectors 3904
+[2022-08-05 13:38:03,047][root][INFO] - Av.rank validation: step 61, computed ctx_vectors 241398, q_vectors 3968
+[2022-08-05 13:38:24,181][root][INFO] - Av.rank validation: step 62, computed ctx_vectors 245293, q_vectors 4032
+[2022-08-05 13:38:45,038][root][INFO] - Av.rank validation: step 63, computed ctx_vectors 249170, q_vectors 4096
+[2022-08-05 13:39:06,055][root][INFO] - Av.rank validation: step 64, computed ctx_vectors 253074, q_vectors 4160
+[2022-08-05 13:39:26,948][root][INFO] - Av.rank validation: step 65, computed ctx_vectors 256961, q_vectors 4224
+[2022-08-05 13:39:48,206][root][INFO] - Av.rank validation: step 66, computed ctx_vectors 260855, q_vectors 4288
+[2022-08-05 13:40:09,410][root][INFO] - Av.rank validation: step 67, computed ctx_vectors 264759, q_vectors 4352
+[2022-08-05 13:40:30,253][root][INFO] - Av.rank validation: step 68, computed ctx_vectors 268637, q_vectors 4416
+[2022-08-05 13:40:51,235][root][INFO] - Av.rank validation: step 69, computed ctx_vectors 272541, q_vectors 4480
+[2022-08-05 13:41:12,412][root][INFO] - Av.rank validation: step 70, computed ctx_vectors 276445, q_vectors 4544
+[2022-08-05 13:41:33,259][root][INFO] - Av.rank validation: step 71, computed ctx_vectors 280324, q_vectors 4608
+[2022-08-05 13:41:54,121][root][INFO] - Av.rank validation: step 72, computed ctx_vectors 284200, q_vectors 4672
+[2022-08-05 13:42:14,994][root][INFO] - Av.rank validation: step 73, computed ctx_vectors 288079, q_vectors 4736
+[2022-08-05 13:42:35,673][root][INFO] - Av.rank validation: step 74, computed ctx_vectors 291924, q_vectors 4800
+[2022-08-05 13:42:56,685][root][INFO] - Av.rank validation: step 75, computed ctx_vectors 295828, q_vectors 4864
+[2022-08-05 13:43:17,555][root][INFO] - Av.rank validation: step 76, computed ctx_vectors 299707, q_vectors 4928
+[2022-08-05 13:43:38,620][root][INFO] - Av.rank validation: step 77, computed ctx_vectors 303611, q_vectors 4992
+[2022-08-05 13:43:59,851][root][INFO] - Av.rank validation: step 78, computed ctx_vectors 307515, q_vectors 5056
+[2022-08-05 13:44:20,881][root][INFO] - Av.rank validation: step 79, computed ctx_vectors 311419, q_vectors 5120
+[2022-08-05 13:44:41,901][root][INFO] - Av.rank validation: step 80, computed ctx_vectors 315323, q_vectors 5184
+[2022-08-05 13:45:02,929][root][INFO] - Av.rank validation: step 81, computed ctx_vectors 319227, q_vectors 5248
+[2022-08-05 13:45:23,945][root][INFO] - Av.rank validation: step 82, computed ctx_vectors 323131, q_vectors 5312
+[2022-08-05 13:45:44,871][root][INFO] - Av.rank validation: step 83, computed ctx_vectors 327016, q_vectors 5376
+[2022-08-05 13:46:05,918][root][INFO] - Av.rank validation: step 84, computed ctx_vectors 330920, q_vectors 5440
+[2022-08-05 13:46:26,954][root][INFO] - Av.rank validation: step 85, computed ctx_vectors 334823, q_vectors 5504
+[2022-08-05 13:46:47,972][root][INFO] - Av.rank validation: step 86, computed ctx_vectors 338727, q_vectors 5568
+[2022-08-05 13:47:09,223][root][INFO] - Av.rank validation: step 87, computed ctx_vectors 342631, q_vectors 5632
+[2022-08-05 13:47:30,267][root][INFO] - Av.rank validation: step 88, computed ctx_vectors 346535, q_vectors 5696
+[2022-08-05 13:47:51,351][root][INFO] - Av.rank validation: step 89, computed ctx_vectors 350439, q_vectors 5760
+[2022-08-05 13:48:12,274][root][INFO] - Av.rank validation: step 90, computed ctx_vectors 354322, q_vectors 5824
+[2022-08-05 13:48:33,306][root][INFO] - Av.rank validation: step 91, computed ctx_vectors 358226, q_vectors 5888
+[2022-08-05 13:48:54,362][root][INFO] - Av.rank validation: step 92, computed ctx_vectors 362130, q_vectors 5952
+[2022-08-05 13:49:15,268][root][INFO] - Av.rank validation: step 93, computed ctx_vectors 366014, q_vectors 6016
+[2022-08-05 13:49:36,325][root][INFO] - Av.rank validation: step 94, computed ctx_vectors 369918, q_vectors 6080
+[2022-08-05 13:49:57,394][root][INFO] - Av.rank validation: step 95, computed ctx_vectors 373822, q_vectors 6144
+[2022-08-05 13:50:18,517][root][INFO] - Av.rank validation: step 96, computed ctx_vectors 377701, q_vectors 6208
+[2022-08-05 13:50:39,596][root][INFO] - Av.rank validation: step 97, computed ctx_vectors 381605, q_vectors 6272
+[2022-08-05 13:51:00,631][root][INFO] - Av.rank validation: step 98, computed ctx_vectors 385509, q_vectors 6336
+[2022-08-05 13:51:21,518][root][INFO] - Av.rank validation: step 99, computed ctx_vectors 389386, q_vectors 6400
+[2022-08-05 13:51:42,372][root][INFO] - Av.rank validation: step 100, computed ctx_vectors 393257, q_vectors 6464
+[2022-08-05 13:51:42,375][root][INFO] - rank=-1; last iteration 101
+[2022-08-05 13:51:42,375][root][INFO] - rank=-1; Multi set iteration finished: iteration per set: [101]
+[2022-08-05 13:51:42,375][root][INFO] - Finished iterating, iteration=101, shard=0
+[2022-08-05 13:51:42,375][root][INFO] - rank=-1; Multi set iteration finished after next: iteration per set: [0]
+[2022-08-05 13:51:43,215][root][INFO] - Av.rank validation: total q_vectors size=torch.Size([6464, 768])
+[2022-08-05 13:51:43,217][root][INFO] - Av.rank validation: total ctx_vectors size=torch.Size([393257, 768])
+[2022-08-05 13:55:24,899][root][INFO] - Av.rank validation: average rank 122.94956683168317, total questions=6464
